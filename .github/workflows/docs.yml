@@ -18,6 +18,10 @@ jobs:
     permissions:
       contents: write  # To push to gh-pages branch
 
+    defaults:
+      run:
+        working-directory: ./lorawan  # Set the working directory to the lorawan subfolder
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -30,6 +34,8 @@ jobs:
 
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "lorawan -> target"
 
       - name: Build documentation
         run: |
@@ -44,5 +50,5 @@ jobs:
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           branch: gh-pages
-          folder: target/doc
-          clean: true 
+          folder: lorawan/target/doc
+          clean: true
