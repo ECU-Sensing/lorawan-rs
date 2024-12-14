@@ -1,0 +1,33 @@
+[package]
+name = "lorawan"
+version = "0.1.0"
+edition = "2021"
+description = "A no_std LoRaWAN implementation in Rust"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+embedded-hal = { version = "0.2", features = ["unproven"] }
+heapless = "0.7"  # For fixed-size vectors and data structures
+aes = "0.8"       # For AES-128 encryption
+cmac = "0.7"      # For MIC calculation
+nb = "1.0"        # Non-blocking I/O traits
+
+[features]
+default = ["sx127x"]
+sx127x = []
+sx126x = []
+
+[[example]]
+name = "hello_world"
+required-features = ["sx127x"]
+
+[[example]]
+name = "repeater"
+required-features = ["sx127x"]
+
+[dev-dependencies]
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+panic-halt = "0.2"
+atsamd21-hal = "0.13"  # For Feather M0 examples
+stm32f4xx-hal = "0.13" # For STM32F4 examples
