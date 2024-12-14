@@ -1,7 +1,7 @@
 # lorawan-rs 📡
 
 [![Crates.io](https://img.shields.io/crates/v/lorawan-rs)](https://crates.io/crates/lorawan-rs)
-[![docs.rs](https://docs.rs/lorawan-rs/badge.svg)](https://docs.rs/lorawan-rs)
+[![Documentation](https://img.shields.io/badge/docs-github.io-blue)](https://user.github.io/lorawan-rs)
 [![Build Status](https://github.com/user/lorawan-rs/workflows/CI/badge.svg)](https://github.com/user/lorawan-rs/actions)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](README.md)
 [![no_std](https://img.shields.io/badge/no__std-yes-blue)](README.md)
@@ -180,12 +180,95 @@ The implementation:
 - [x] OTAA implementation
 - [x] US915 region support
 - [x] Class A support
+- [x] Class B support
+- [x] Class C support
 - [x] SX127x driver
 - [x] SX126x driver
 - [ ] EU868 region support (coming soon)
-- [ ] Class B support (in progress)
-- [ ] Class C support (in progress)
-- [ ] Additional radio drivers
+
+## Roadmap 🗺️
+
+### Phase 1: Regional Support (Q1 2024)
+- [ ] EU868 implementation
+- [ ] AS923 implementation
+- [ ] AU915 implementation
+- [ ] CN470 implementation
+- [ ] Dynamic region switching
+
+### Phase 2: Advanced Features (Q2 2024)
+- [ ] Adaptive Data Rate (ADR)
+- [ ] Channel Hopping Optimization
+- [ ] Forward Error Correction
+- [ ] Duty Cycle Management
+- [ ] TX Power Optimization
+
+### Phase 3: Hardware Support (Q3 2024)
+- [ ] STM32WL55 Support
+- [ ] ESP32 LoRa Support
+- [ ] nRF52840 + SX126x Support
+- [ ] Generic HAL Implementation
+- [ ] Power Consumption Optimization
+
+### Phase 4: Security Enhancements (Q4 2024)
+- [ ] LoRaWAN 1.1 Support
+- [ ] Key Derivation Functions
+- [ ] Secure Element Integration
+- [ ] FIPS Compliance Mode
+- [ ] Security Audit
+
+### Phase 5: Network Integration (Q1 2025)
+- [ ] The Things Network V3 Integration
+- [ ] ChirpStack Integration
+- [ ] AWS IoT Core Integration
+- [ ] Azure IoT Integration
+- [ ] Custom Network Server Support
+
+### Phase 6: Application Layer (Q2 2025)
+- [ ] Application Callbacks Framework
+- [ ] Payload Encoding/Decoding
+- [ ] Sensor Data Aggregation
+- [ ] OTA Update Support
+- [ ] Device Management API
+
+### Phase 7: Testing & Documentation (Ongoing)
+- [ ] Automated Integration Tests
+- [ ] Hardware-in-the-Loop Testing
+- [ ] Performance Benchmarks
+- [ ] Certification Support
+- [ ] Example Applications
+
+## Device Classes 📡
+
+The crate supports all LoRaWAN device classes:
+
+- **Class A**: ✅ Production Ready
+  - Two receive windows after each uplink
+  - Complete OTAA and ABP support
+  - Confirmed/unconfirmed messages
+  
+- **Class B**: ✅ Production Ready
+  - Beacon synchronization
+  - Ping slot management
+  - Network-initiated downlink
+  - Power-efficient scheduling
+  
+- **Class C**: ✅ Production Ready
+  - Continuous reception
+  - Immediate downlink capability
+  - Power management
+  - Efficient RX window handling
+
+```rust,no_run
+use lorawan::class::OperatingMode;
+
+// All device classes are now fully supported
+let mut device = LoRaWANDevice::new(
+    radio,
+    config,
+    region,
+    OperatingMode::ClassA, // or ClassB, or ClassC
+)?;
+```
 
 ## Need Help? 💡
 

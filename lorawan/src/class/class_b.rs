@@ -8,33 +8,149 @@ use crate::lorawan::{
 use crate::radio::Radio;
 use super::{BeaconTiming, ClassBState, DeviceClass, OperatingMode, PingSlot};
 
-/// Beacon parameters
-const BEACON_PERIOD: u32 = 128; // seconds
-const BEACON_RESERVED: u32 = 2_120; // ms
-const BEACON_GUARD: u32 = 3_000; // ms
-const BEACON_WINDOW: u32 = 122_880; // ms
+/// Beacon timing constants
+pub const BEACON_PERIOD: u32 = 128; // seconds
+pub const BEACON_RESERVED: u32 = 2_120; // ms
+pub const BEACON_GUARD: u32 = 3_000; // ms
+pub const BEACON_WINDOW: u32 = 122_880; // ms
+pub const BEACON_SLOT_LEN: u32 = 30; // ms
 
-/// Class B state machine states
+/// Beacon acquisition states
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum State {
-    /// Not synchronized with beacon
+pub enum BeaconState {
+    /// Not synchronized with network beacons
     NotSynchronized,
-    /// Waiting for beacon
-    WaitingBeacon,
-    /// In beacon reception window
-    InBeaconWindow,
-    /// Synchronized, processing ping slots
+    /// Cold start - scanning all possible channels
+    ColdStart,
+    /// Warm start - using last known timing
+    WarmStart,
+    /// Synchronized with network beacons
     Synchronized,
+    /// Lost synchronization - missed beacons
+    Lost,
+}
+
+/// Beacon frame structure
+#[derive(Debug, Clone)]
+pub struct BeaconFrame {
+    /// Network time in seconds since GPS epoch
+    pub time: u32,
+    /// CRC of the beacon payload
+    pub crc: u16,
+    /// Gateway specific info
+    pub gwspec: u8,
+    /// Additional beacon information
+    pub info: [u8; 7],
+}
+
+impl BeaconFrame {
+    /// Parse beacon frame from raw bytes
+    pub fn parse(data: &[u8]) -> Result<Self, MacError<Radio::Error>> {
+        if data.len() < 17 {
+            return Err(MacError::InvalidLength);
+        }
+
+        let time = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        let crc = u16::from_be_bytes([data[4], data[5]]);
+        let gwspec = data[6];
+        let mut info = [0u8; 7];
+        info.copy_from_slice(&data[7..14]);
+
+        Ok(Self {
+            time,
+            crc,
+            gwspec,
+            info,
+        })
+    }
+}
+
+/// Ping slot timing calculator
+pub struct PingSlotCalculator {
+    /// Device address used for slot calculation
+    dev_addr: u32,
+    /// Current beacon time
+    beacon_time: u32,
+    /// Ping period (32s to 128s)
+    ping_period: u32,
+}
+
+impl PingSlotCalculator {
+    /// Create new ping slot calculator
+    pub fn new(dev_addr: u32, beacon_time: u32, ping_period: u32) -> Self {
+        Self {
+            dev_addr,
+            beacon_time,
+            ping_period,
+        }
+    }
+
+    /// Calculate ping offset within the beacon period
+    pub fn calculate_ping_offset(&self) -> u32 {
+        // Implementation based on LoRaWAN specification
+        let rand = self.dev_addr.wrapping_mul(self.beacon_time);
+        (rand % self.ping_period) * BEACON_SLOT_LEN
+    }
+}
+
+/// Ping slot state tracking
+#[derive(Debug, Clone)]
+pub struct PingSlotState {
+    /// Next scheduled ping slot time
+    pub next_slot: u32,
+    /// Current ping period
+    pub period: u32,
+    /// Frequency for reception
+    pub frequency: u32,
+    /// Data rate for reception
+    pub data_rate: u8,
+    /// Number of missed ping slots
+    missed_slots: u32,
+}
+
+impl PingSlotState {
+    /// Create new ping slot state
+    pub fn new(period: u32, frequency: u32, data_rate: u8) -> Self {
+        Self {
+            next_slot: 0,
+            period,
+            frequency,
+            data_rate,
+            missed_slots: 0,
+        }
+    }
+
+    /// Update next ping slot timing
+    pub fn update_next_slot(&mut self, calculator: &PingSlotCalculator) {
+        self.next_slot = calculator.calculate_ping_offset();
+    }
+
+    /// Record a missed ping slot
+    pub fn record_missed_slot(&mut self) {
+        self.missed_slots = self.missed_slots.saturating_add(1);
+    }
+
+    /// Reset missed slot counter
+    pub fn reset_missed_slots(&mut self) {
+        self.missed_slots = 0;
+    }
+
+    /// Get number of consecutive missed slots
+    pub fn get_missed_slots(&self) -> u32 {
+        self.missed_slots
+    }
 }
 
 /// Class B device implementation
 pub struct ClassB<R: Radio, REG: Region> {
     /// MAC layer
     mac: MacLayer<R, REG>,
-    /// Current state
-    state: State,
+    /// Current beacon state
+    beacon_state: BeaconState,
     /// Class B specific state
     class_b: ClassBState,
+    /// Ping slot state
+    ping_slot: PingSlotState,
     /// Last beacon timestamp
     last_beacon: Option<Duration>,
     /// Current time (would be provided by timer in real implementation)
@@ -46,8 +162,9 @@ impl<R: Radio, REG: Region> ClassB<R, REG> {
     pub fn new(mac: MacLayer<R, REG>) -> Self {
         Self {
             mac,
-            state: State::NotSynchronized,
+            beacon_state: BeaconState::NotSynchronized,
             class_b: ClassBState::new(),
+            ping_slot: PingSlotState::new(32, 0, 0), // Default values
             last_beacon: None,
             current_time: Duration::from_secs(0),
         }
@@ -55,81 +172,171 @@ impl<R: Radio, REG: Region> ClassB<R, REG> {
 
     /// Start beacon acquisition
     pub fn start_beacon_acquisition(&mut self) {
-        self.state = State::WaitingBeacon;
+        match self.last_beacon {
+            Some(_) => {
+                // Warm start - we have previous timing info
+                self.beacon_state = BeaconState::WarmStart;
+            }
+            None => {
+                // Cold start - scan all channels
+                self.beacon_state = BeaconState::ColdStart;
+            }
+        }
     }
 
-    /// Process beacon
+    /// Process beacon reception
     fn process_beacon(&mut self) -> Result<(), MacError<R::Error>> {
-        match self.state {
-            State::WaitingBeacon => {
-                // Calculate time to next beacon window
-                if let Some(timing) = self.class_b.beacon_timing {
-                    let elapsed = self.current_time.as_secs();
-                    if elapsed >= timing.time_to_beacon as u64 {
-                        // Time to open beacon window
-                        self.state = State::InBeaconWindow;
-                        // Configure radio for beacon reception
-                        // TODO: Configure radio with beacon parameters
+        match self.beacon_state {
+            BeaconState::ColdStart => {
+                // Scan all possible beacon channels
+                let beacon_channels = self.mac.get_beacon_channels();
+                for channel in beacon_channels {
+                    // Configure radio for beacon reception
+                    self.mac.set_rx_config(
+                        channel.frequency,
+                        channel.data_rate,
+                        false, // Not continuous
+                    )?;
+
+                    // Try to receive beacon
+                    let mut buffer = [0u8; 17];
+                    if let Ok(len) = self.mac.receive(&mut buffer) {
+                        if let Ok(beacon) = BeaconFrame::parse(&buffer[..len]) {
+                            self.handle_beacon(beacon)?;
+                            return Ok(());
+                        }
+                    }
+                }
+                // No beacon found, stay in cold start
+            }
+            BeaconState::WarmStart => {
+                // Use last known timing
+                if let Some(last_beacon) = self.last_beacon {
+                    let elapsed = self.current_time - last_beacon;
+                    let beacon_period = Duration::from_secs(BEACON_PERIOD as u64);
+                    
+                    // Calculate time to next beacon window
+                    if elapsed >= beacon_period {
+                        // Missed beacon, go back to cold start
+                        self.beacon_state = BeaconState::ColdStart;
+                    } else {
+                        let time_to_window = beacon_period - elapsed;
+                        if time_to_window.as_millis() <= BEACON_WINDOW as u128 {
+                            // In beacon window, try to receive
+                            let channel = self.mac.get_next_beacon_channel();
+                            if let Some(channel) = channel {
+                                self.mac.set_rx_config(
+                                    channel.frequency,
+                                    channel.data_rate,
+                                    false,
+                                )?;
+
+                                let mut buffer = [0u8; 17];
+                                if let Ok(len) = self.mac.receive(&mut buffer) {
+                                    if let Ok(beacon) = BeaconFrame::parse(&buffer[..len]) {
+                                        self.handle_beacon(beacon)?;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
-            State::InBeaconWindow => {
-                // Try to receive beacon
-                let mut buffer = [0u8; 32]; // Beacon size
+            BeaconState::Synchronized => {
+                // Regular beacon reception
+                let mut buffer = [0u8; 17];
                 if let Ok(len) = self.mac.receive(&mut buffer) {
-                    // Process beacon
-                    // TODO: Parse beacon, update timing
-                    self.last_beacon = Some(self.current_time);
-                    self.state = State::Synchronized;
-                }
-
-                // Check if beacon window expired
-                if self.current_time.as_millis() % (BEACON_PERIOD as u128 * 1000) >= BEACON_RESERVED as u128 {
-                    // Beacon window expired
-                    if self.last_beacon.is_none() {
-                        // No beacon received, go back to waiting
-                        self.state = State::WaitingBeacon;
+                    if let Ok(beacon) = BeaconFrame::parse(&buffer[..len]) {
+                        self.handle_beacon(beacon)?;
+                    } else {
+                        // Failed to parse beacon
+                        self.ping_slot.record_missed_slot();
+                        if self.ping_slot.get_missed_slots() > 2 {
+                            // Lost synchronization after missing 3 beacons
+                            self.beacon_state = BeaconState::Lost;
+                        }
                     }
                 }
+            }
+            BeaconState::Lost => {
+                // Reset and start cold scan
+                self.last_beacon = None;
+                self.beacon_state = BeaconState::ColdStart;
             }
             _ => {}
         }
         Ok(())
     }
 
+    /// Handle received beacon
+    fn handle_beacon(&mut self, beacon: BeaconFrame) -> Result<(), MacError<R::Error>> {
+        // Update timing
+        self.last_beacon = Some(self.current_time);
+        
+        // Update ping slot timing if needed
+        if let Some(dev_addr) = self.mac.get_device_address() {
+            let calculator = PingSlotCalculator::new(
+                dev_addr,
+                beacon.time,
+                self.ping_slot.period,
+            );
+            self.ping_slot.update_next_slot(&calculator);
+        }
+
+        // Mark as synchronized
+        self.beacon_state = BeaconState::Synchronized;
+        
+        Ok(())
+    }
+
     /// Process ping slots
     fn process_ping_slots(&mut self) -> Result<(), MacError<R::Error>> {
-        if self.state != State::Synchronized {
+        if self.beacon_state != BeaconState::Synchronized {
             return Ok(());
         }
 
-        // Calculate time since last beacon
+        // Check if we're in a ping slot
         if let Some(last_beacon) = self.last_beacon {
             let elapsed = self.current_time - last_beacon;
+            let elapsed_ms = elapsed.as_millis() as u32;
             
-            // Check each ping slot
-            for slot in self.class_b.ping_slots.iter() {
-                let slot_time = Duration::from_secs(slot.time as u64);
-                let slot_end = slot_time + Duration::from_millis(slot.duration as u64);
+            // Calculate if we're in an active ping slot
+            let slot_offset = elapsed_ms % (self.ping_slot.period * 1000);
+            if slot_offset >= self.ping_slot.next_slot && 
+               slot_offset < self.ping_slot.next_slot + BEACON_SLOT_LEN {
+                // We're in an active ping slot
+                self.mac.set_rx_config(
+                    self.ping_slot.frequency,
+                    self.ping_slot.data_rate,
+                    false,
+                )?;
 
-                if elapsed >= slot_time && elapsed < slot_end {
-                    // We're in a ping slot, listen for downlink
-                    let mut buffer = [0u8; 256];
-                    if let Ok(len) = self.mac.receive(&mut buffer) {
-                        // Process received data
-                        // TODO: Handle received data
-                    }
+                // Listen for downlink
+                let mut buffer = [0u8; 256];
+                if let Ok(len) = self.mac.receive(&mut buffer) {
+                    // Process received data
+                    self.handle_ping_slot_data(&buffer[..len])?;
+                    self.ping_slot.reset_missed_slots();
+                } else {
+                    self.ping_slot.record_missed_slot();
                 }
-            }
-
-            // Check if we've passed the beacon period
-            if elapsed.as_secs() >= BEACON_PERIOD as u64 {
-                // Reset beacon timing if we missed a beacon
-                self.state = State::WaitingBeacon;
-                self.last_beacon = None;
             }
         }
 
+        Ok(())
+    }
+
+    /// Handle data received during ping slot
+    fn handle_ping_slot_data(&mut self, data: &[u8]) -> Result<(), MacError<R::Error>> {
+        // Verify MIC and decrypt payload
+        if let Ok(payload) = self.mac.decrypt_payload(data) {
+            // Process any MAC commands
+            if let Some(commands) = self.mac.extract_mac_commands(&payload) {
+                for cmd in commands {
+                    self.mac.process_mac_command(cmd)?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -168,20 +375,18 @@ impl<R: Radio, REG: Region> DeviceClass for ClassB<R, REG> {
     }
 
     fn send_join_request(&mut self, dev_eui: [u8; 8], app_eui: [u8; 8], app_key: [u8; 16]) -> Result<(), Self::Error> {
-        // Send join request using MAC layer
-        self.mac.join_request(dev_eui, app_eui, app_key)?;
-
         // Reset beacon synchronization
-        self.state = State::NotSynchronized;
+        self.beacon_state = BeaconState::NotSynchronized;
         self.last_beacon = None;
         self.class_b.clear_ping_slots();
 
-        Ok(())
+        // Send join request using MAC layer
+        self.mac.join_request(dev_eui, app_eui, app_key)
     }
 
     fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
-        // Only receive if in beacon window or ping slot
-        if self.state != State::InBeaconWindow && self.state != State::Synchronized {
+        // Only receive if synchronized and in appropriate window
+        if self.beacon_state != BeaconState::Synchronized {
             return Ok(0);
         }
 

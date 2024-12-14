@@ -315,4 +315,203 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
         }
         Ok(())
     }
+}
+
+// Add to the existing MacCommand enum
+#[derive(Debug, Clone)]
+pub enum MacCommand {
+    // ... existing commands ...
+
+    /// PingSlotInfoReq - Device requests ping slot parameters
+    PingSlotInfoReq {
+        periodicity: u8,
+    },
+    /// PingSlotInfoAns - Network confirms ping slot parameters
+    PingSlotInfoAns,
+    
+    /// BeaconTimingReq - Device requests next beacon timing
+    BeaconTimingReq,
+    /// BeaconTimingAns - Network provides next beacon timing
+    BeaconTimingAns {
+        delay: u16,
+        channel: u8,
+    },
+    
+    /// BeaconFreqReq - Network configures beacon frequency
+    BeaconFreqReq {
+        frequency: u32,
+    },
+    /// BeaconFreqAns - Device confirms beacon frequency
+    BeaconFreqAns {
+        status: u8,
+    },
+}
+
+impl MacCommand {
+    // Add to the existing from_bytes function
+    pub fn from_bytes(cid: u8, payload: &[u8]) -> Result<Self, MacError> {
+        match cid {
+            // ... existing command parsing ...
+
+            // Class B MAC Commands
+            0x10 => {
+                // PingSlotInfoReq
+                if payload.len() != 1 {
+                    return Err(MacError::InvalidLength);
+                }
+                Ok(MacCommand::PingSlotInfoReq {
+                    periodicity: payload[0] & 0x07,
+                })
+            }
+            0x11 => {
+                // PingSlotInfoAns
+                Ok(MacCommand::PingSlotInfoAns)
+            }
+            0x12 => {
+                // BeaconTimingReq
+                Ok(MacCommand::BeaconTimingReq)
+            }
+            0x13 => {
+                // BeaconTimingAns
+                if payload.len() != 3 {
+                    return Err(MacError::InvalidLength);
+                }
+                let delay = u16::from_le_bytes([payload[0], payload[1]]);
+                Ok(MacCommand::BeaconTimingAns {
+                    delay,
+                    channel: payload[2],
+                })
+            }
+            0x14 => {
+                // BeaconFreqReq
+                if payload.len() != 3 {
+                    return Err(MacError::InvalidLength);
+                }
+                let freq = u32::from_le_bytes([payload[0], payload[1], payload[2], 0]);
+                Ok(MacCommand::BeaconFreqReq {
+                    frequency: freq * 100,
+                })
+            }
+            0x15 => {
+                // BeaconFreqAns
+                if payload.len() != 1 {
+                    return Err(MacError::InvalidLength);
+                }
+                Ok(MacCommand::BeaconFreqAns {
+                    status: payload[0],
+                })
+            }
+            _ => Err(MacError::UnknownCommand),
+        }
+    }
+
+    // Add to the existing to_bytes function
+    pub fn to_bytes(&self) -> (u8, Vec<u8, 16>) {
+        match self {
+            // ... existing command serialization ...
+
+            // Class B MAC Commands
+            MacCommand::PingSlotInfoReq { periodicity } => {
+                let mut payload = Vec::new();
+                payload.extend_from_slice(&[periodicity & 0x07]);
+                (0x10, payload)
+            }
+            MacCommand::PingSlotInfoAns => (0x11, Vec::new()),
+            MacCommand::BeaconTimingReq => (0x12, Vec::new()),
+            MacCommand::BeaconTimingAns { delay, channel } => {
+                let mut payload = Vec::new();
+                payload.extend_from_slice(&delay.to_le_bytes());
+                payload.extend_from_slice(&[*channel]);
+                (0x13, payload)
+            }
+            MacCommand::BeaconFreqReq { frequency } => {
+                let mut payload = Vec::new();
+                let freq_bytes = (*frequency / 100).to_le_bytes();
+                payload.extend_from_slice(&freq_bytes[0..3]);
+                (0x14, payload)
+            }
+            MacCommand::BeaconFreqAns { status } => {
+                let mut payload = Vec::new();
+                payload.extend_from_slice(&[*status]);
+                (0x15, payload)
+            }
+        }
+    }
+}
+
+impl<R: Radio, REG: Region> MacLayer<R, REG> {
+    // Add Class B command handling methods
+    
+    /// Handle PingSlotInfoReq command
+    pub fn handle_ping_slot_info_req(&mut self, periodicity: u8) -> Result<(), MacError<R::Error>> {
+        // Validate periodicity (0-7)
+        if periodicity > 7 {
+            return Err(MacError::InvalidValue);
+        }
+
+        // Store ping slot parameters
+        // TODO: Update device ping slot configuration
+
+        // Send answer
+        self.queue_mac_command(MacCommand::PingSlotInfoAns);
+        
+        Ok(())
+    }
+
+    /// Handle BeaconTimingReq command
+    pub fn handle_beacon_timing_req(&mut self) -> Result<(), MacError<R::Error>> {
+        // Calculate time to next beacon
+        // TODO: Calculate actual beacon timing
+
+        // Send answer with next beacon timing
+        self.queue_mac_command(MacCommand::BeaconTimingAns {
+            delay: 0, // TODO: Calculate actual delay
+            channel: 0, // TODO: Use actual beacon channel
+        });
+        
+        Ok(())
+    }
+
+    /// Handle BeaconFreqReq command
+    pub fn handle_beacon_freq_req(&mut self, frequency: u32) -> Result<(), MacError<R::Error>> {
+        // Validate frequency
+        if !self.region.is_valid_frequency(frequency) {
+            // Reject invalid frequency
+            self.queue_mac_command(MacCommand::BeaconFreqAns { status: 1 });
+            return Ok(());
+        }
+
+        // Update beacon frequency
+        // TODO: Store and apply new beacon frequency
+
+        // Accept new frequency
+        self.queue_mac_command(MacCommand::BeaconFreqAns { status: 0 });
+        
+        Ok(())
+    }
+
+    /// Process received MAC command
+    pub fn process_mac_command(&mut self, command: MacCommand) -> Result<(), MacError<R::Error>> {
+        match command {
+            // ... existing command handling ...
+
+            // Class B MAC Commands
+            MacCommand::PingSlotInfoReq { periodicity } => {
+                self.handle_ping_slot_info_req(periodicity)?;
+            }
+            MacCommand::BeaconTimingReq => {
+                self.handle_beacon_timing_req()?;
+            }
+            MacCommand::BeaconFreqReq { frequency } => {
+                self.handle_beacon_freq_req(frequency)?;
+            }
+            MacCommand::PingSlotInfoAns |
+            MacCommand::BeaconTimingAns { .. } |
+            MacCommand::BeaconFreqAns { .. } => {
+                // These are responses to our requests, handle accordingly
+                // TODO: Update device state based on responses
+            }
+        }
+        Ok(())
+    }
 } 

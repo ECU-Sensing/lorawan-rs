@@ -1,0 +1,48 @@
+name: Deploy Documentation
+
+on:
+  push:
+    branches:
+      - main  # or your default branch
+  pull_request:
+    branches:
+      - main
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  docs:
+    name: Build and deploy documentation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # To push to gh-pages branch
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, rust-docs
+
+      - name: Setup cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build documentation
+        run: |
+          cargo doc --no-deps --all-features
+          # Add index.html redirect
+          echo '<meta http-equiv="refresh" content="0; url=lorawan">' > target/doc/index.html
+          # Ensure .nojekyll file exists
+          touch target/doc/.nojekyll
+
+      - name: Deploy to GitHub Pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          branch: gh-pages
+          folder: target/doc
+          clean: true 
