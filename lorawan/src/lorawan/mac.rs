@@ -145,13 +145,12 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
         f_port: u8,
         data: &[u8],
     ) -> Result<(), MacError<R::Error>> {
-        // Select channel
+        // Select next channel using frequency hopping
         let channel = self.region
-            .enabled_channels()
-            .next()
+            .get_next_channel()
             .ok_or(MacError::InvalidFrame)?;
 
-        // Configure radio
+        // Configure radio for selected channel
         self.phy
             .configure_tx::<REG>(channel, self.region.data_rate())
             .map_err(MacError::Radio)?;
@@ -216,22 +215,14 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
         app_eui: EUI64,
         app_key: AESKey,
     ) -> Result<(), MacError<R::Error>> {
-        // Select join frequency
-        let frequency = self.region
-            .join_frequencies()
-            .next()
+        // Select next join channel using frequency hopping
+        let channel = self.region
+            .get_next_join_channel()
             .ok_or(MacError::InvalidFrame)?;
 
-        let channel = Channel {
-            frequency,
-            min_dr: self.region.data_rate(),
-            max_dr: self.region.data_rate(),
-            enabled: true,
-        };
-
-        // Configure radio
+        // Configure radio for selected channel
         self.phy
-            .configure_tx::<REG>(&channel, self.region.data_rate())
+            .configure_tx::<REG>(channel, self.region.data_rate())
             .map_err(MacError::Radio)?;
 
         // Prepare frame
@@ -312,6 +303,16 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
     /// Handle join accept
     fn handle_join_accept(&mut self, buffer: &[u8], len: usize) -> Result<(), MacError<R::Error>> {
         // TODO: Decrypt join accept, extract parameters, derive session keys
+        Ok(())
+    }
+
+    /// Configure for TTN US915
+    pub fn configure_for_ttn(&mut self) -> Result<(), MacError<R::Error>> {
+        if let Some(us915) = (&mut self.region as *mut REG).cast::<US915>() {
+            unsafe {
+                (*us915).configure_ttn_us915();
+            }
+        }
         Ok(())
     }
 } 

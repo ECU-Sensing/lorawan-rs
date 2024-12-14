@@ -161,6 +161,61 @@ impl US915 {
             DataRate::RFU => 0,
         }
     }
+
+    /// Get next channel for transmission using frequency hopping
+    pub fn get_next_channel(&mut self) -> Option<&Channel> {
+        // Get list of enabled channels
+        let enabled: Vec<&Channel, 72> = self.enabled_channels().collect();
+        if enabled.is_empty() {
+            return None;
+        }
+
+        // Use pseudo-random channel selection based on time
+        // This provides frequency hopping without needing to store state
+        let timestamp = cortex_m::peripheral::DWT::cycle_count();
+        let index = (timestamp as usize) % enabled.len();
+        Some(enabled[index])
+    }
+
+    /// Get next join channel for OTAA
+    pub fn get_next_join_channel(&mut self) -> Option<&Channel> {
+        // For join requests, use pseudo-random selection from 125 kHz channels
+        let join_channels: Vec<&Channel, 64> = self.channels[0..64]
+            .iter()
+            .filter(|c| c.enabled)
+            .collect();
+
+        if join_channels.is_empty() {
+            return None;
+        }
+
+        let timestamp = cortex_m::peripheral::DWT::cycle_count();
+        let index = (timestamp as usize) % join_channels.len();
+        Some(join_channels[index])
+    }
+
+    /// Configure TTN sub-band (typically sub-band 2 for US915)
+    pub fn configure_ttn_us915(&mut self) {
+        // TTN US915 uses sub-band 2 (channels 8-15 and 65)
+        self.set_sub_band(1); // 0-based index for sub-band 2
+        
+        // Enable only the 8 125 kHz channels and 1 500 kHz channel
+        for (i, channel) in self.channels.iter_mut().enumerate() {
+            channel.enabled = (i >= 8 && i < 16) || i == 65;
+        }
+    }
+
+    /// Enable all channels in the current sub-band
+    pub fn enable_all_channels(&mut self) {
+        for channel in self.channels.iter_mut() {
+            channel.enabled = true;
+        }
+    }
+
+    /// Get number of enabled channels
+    pub fn enabled_channel_count(&self) -> usize {
+        self.enabled_channels().count()
+    }
 }
 
 /// Generic region trait
@@ -182,6 +237,15 @@ pub trait Region {
     
     /// Get maximum payload size for current data rate
     fn max_payload_size(&self) -> usize;
+
+    /// Get next channel for transmission using frequency hopping
+    fn get_next_channel(&mut self) -> Option<&Channel>;
+
+    /// Get next join channel for OTAA
+    fn get_next_join_channel(&mut self) -> Option<&Channel>;
+
+    /// Get number of enabled channels
+    fn enabled_channel_count(&self) -> usize;
 }
 
 impl Region for US915 {
@@ -207,5 +271,17 @@ impl Region for US915 {
     
     fn max_payload_size(&self) -> usize {
         self.max_payload_size()
+    }
+
+    fn get_next_channel(&mut self) -> Option<&Channel> {
+        self.get_next_channel()
+    }
+
+    fn get_next_join_channel(&mut self) -> Option<&Channel> {
+        self.get_next_join_channel()
+    }
+
+    fn enabled_channel_count(&self) -> usize {
+        self.enabled_channel_count()
     }
 } 
