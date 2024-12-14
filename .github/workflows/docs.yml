@@ -3,7 +3,7 @@ name: Deploy Documentation
 on:
   push:
     branches:
-      - main  # or your default branch
+      - main
   pull_request:
     branches:
       - main
@@ -16,11 +16,7 @@ jobs:
     name: Build and deploy documentation
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # To push to gh-pages branch
-
-    defaults:
-      run:
-        working-directory: ./lorawan  # Set the working directory to the lorawan subfolder
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -35,14 +31,24 @@ jobs:
       - name: Setup cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "lorawan -> target"
+          workspaces: |
+            lorawan -> target
+          cache-directories: |
+            lorawan/target/doc
 
       - name: Build documentation
+        working-directory: ./lorawan
         run: |
+          # Verify we're in the right directory
+          test -f Cargo.toml || (echo "Cargo.toml not found" && exit 1)
+          
+          # Build docs
           cargo doc --no-deps --all-features
-          # Add index.html redirect
+          
+          # Create redirect
           echo '<meta http-equiv="refresh" content="0; url=lorawan">' > target/doc/index.html
-          # Ensure .nojekyll file exists
+          
+          # Ensure .nojekyll exists
           touch target/doc/.nojekyll
 
       - name: Deploy to GitHub Pages

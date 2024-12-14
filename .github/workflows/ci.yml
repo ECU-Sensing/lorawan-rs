@@ -1,66 +1,101 @@
-name: Continuous Integration
+name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Test
+  check:
+    name: Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
           toolchain: stable
-          override: true
           components: rustfmt, clippy
       
-      - name: Check formatting
-        uses: actions-rs/cargo@v1
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          command: fmt
-          args: --all -- --check
+          workspaces: |
+            lorawan -> target
+      
+      - name: Check formatting
+        working-directory: ./lorawan
+        run: cargo fmt --all -- --check
       
       - name: Clippy
-        uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: -- -D warnings
+        working-directory: ./lorawan
+        run: cargo clippy -- -D warnings
       
       - name: Run tests
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --verbose
+        working-directory: ./lorawan
+        run: cargo test --all-features
 
   build:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
           toolchain: stable
-          override: true
-          target: thumbv7em-none-eabihf  # Common target for embedded systems
+          target: thumbv7em-none-eabihf
       
-      - name: Build (no_std)
-        uses: actions-rs/cargo@v1
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          command: build
-          args: --target thumbv7em-none-eabihf --release
+          workspaces: |
+            lorawan -> target
+      
+      - name: Build (debug)
+        working-directory: ./lorawan
+        run: cargo build --target thumbv7em-none-eabihf
+      
+      - name: Build (release)
+        working-directory: ./lorawan
+        run: cargo build --target thumbv7em-none-eabihf --release
+
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            lorawan -> target
+      
+      - name: Run unit tests
+        working-directory: ./lorawan
+        run: cargo test --lib
+      
+      - name: Run integration tests
+        working-directory: ./lorawan
+        run: cargo test --test '*'
+      
+      - name: Run doc tests
+        working-directory: ./lorawan
+        run: cargo test --doc
 
   docs:
     name: Documentation
