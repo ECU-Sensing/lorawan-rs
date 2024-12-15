@@ -4,13 +4,7 @@
 //! It handles device configuration, activation, and message handling.
 
 use crate::{
-    class::{
-        class_a::ClassA,
-        class_b::ClassB,
-        class_c::ClassC,
-        DeviceClass,
-        OperatingMode,
-    },
+    class::{class_a::ClassA, class_b::ClassB, class_c::ClassC, DeviceClass, OperatingMode},
     config::device::{AESKey, DeviceConfig, SessionState},
     lorawan::{
         mac::{MacError, MacLayer},
@@ -86,7 +80,11 @@ impl<R: Radio + Clone, REG: Region> LoRaWANDevice<R, REG> {
             }
             OperatingMode::ClassC => {
                 let mac = MacLayer::new(radio, region.clone(), session.clone());
-                device.class_c = Some(ClassC::new(mac, region.rx2_frequency(), region.rx2_data_rate()));
+                device.class_c = Some(ClassC::new(
+                    mac,
+                    region.rx2_frequency(),
+                    region.rx2_data_rate(),
+                ));
             }
             _ => {}
         }
@@ -109,10 +107,14 @@ impl<R: Radio + Clone, REG: Region> LoRaWANDevice<R, REG> {
         // Get current session state from active class
         let session = match self.mode {
             OperatingMode::ClassA => self.class_a.get_session_state(),
-            OperatingMode::ClassB => self.class_b.as_ref()
+            OperatingMode::ClassB => self
+                .class_b
+                .as_ref()
                 .ok_or(DeviceError::InvalidState)?
                 .get_session_state(),
-            OperatingMode::ClassC => self.class_c.as_ref()
+            OperatingMode::ClassC => self
+                .class_c
+                .as_ref()
                 .ok_or(DeviceError::InvalidState)?
                 .get_session_state(),
         };
@@ -122,17 +124,17 @@ impl<R: Radio + Clone, REG: Region> LoRaWANDevice<R, REG> {
             OperatingMode::ClassA => {
                 let mac = self.class_a.get_mac_layer();
                 (mac.get_radio().clone(), mac.get_region().clone())
-            },
+            }
             OperatingMode::ClassB => {
                 let class_b = self.class_b.as_ref().ok_or(DeviceError::InvalidState)?;
                 let mac = class_b.get_mac_layer();
                 (mac.get_radio().clone(), mac.get_region().clone())
-            },
+            }
             OperatingMode::ClassC => {
                 let class_c = self.class_c.as_ref().ok_or(DeviceError::InvalidState)?;
                 let mac = class_c.get_mac_layer();
                 (mac.get_radio().clone(), mac.get_region().clone())
-            },
+            }
         };
 
         // Initialize new class based on requested mode
@@ -142,15 +144,23 @@ impl<R: Radio + Clone, REG: Region> LoRaWANDevice<R, REG> {
                 self.class_a = ClassA::new(mac);
                 self.class_b = None;
                 self.class_c = None;
-            },
+            }
             OperatingMode::ClassB => {
-                self.class_a = ClassA::new(MacLayer::new(radio.clone(), region.clone(), session.clone()));
+                self.class_a = ClassA::new(MacLayer::new(
+                    radio.clone(),
+                    region.clone(),
+                    session.clone(),
+                ));
                 let mac = MacLayer::new(radio, region.clone(), session);
                 self.class_b = Some(ClassB::new(mac));
                 self.class_c = None;
-            },
+            }
             OperatingMode::ClassC => {
-                self.class_a = ClassA::new(MacLayer::new(radio.clone(), region.clone(), session.clone()));
+                self.class_a = ClassA::new(MacLayer::new(
+                    radio.clone(),
+                    region.clone(),
+                    session.clone(),
+                ));
                 let mac = MacLayer::new(radio, region.clone(), session);
                 self.class_c = Some(ClassC::new(
                     mac,
@@ -158,7 +168,7 @@ impl<R: Radio + Clone, REG: Region> LoRaWANDevice<R, REG> {
                     region.rx2_data_rate(),
                 ));
                 self.class_b = None;
-            },
+            }
         }
 
         self.mode = mode;
@@ -254,10 +264,14 @@ impl<R: Radio + Clone, REG: Region> LoRaWANDevice<R, REG> {
     pub fn get_session_state(&self) -> SessionState {
         match self.mode {
             OperatingMode::ClassA => self.class_a.get_session_state(),
-            OperatingMode::ClassB => self.class_b.as_ref()
+            OperatingMode::ClassB => self
+                .class_b
+                .as_ref()
                 .expect("Class B not initialized")
                 .get_session_state(),
-            OperatingMode::ClassC => self.class_c.as_ref()
+            OperatingMode::ClassC => self
+                .class_c
+                .as_ref()
                 .expect("Class C not initialized")
                 .get_session_state(),
         }

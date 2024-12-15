@@ -59,17 +59,17 @@ pub fn compute_mic(
     for i in 0..k {
         let start = i * BLOCK_SIZE;
         let end = (start + BLOCK_SIZE).min(data.len());
-        
+
         // XOR with previous block
         for j in 0..end.saturating_sub(start) {
             x[j] ^= data[start + j];
         }
-        
+
         // If this is the last block and it's not full, pad with zeros (already done by initialization)
         if i == k - 1 && end.saturating_sub(start) < BLOCK_SIZE {
             x[end.saturating_sub(start)] ^= 0x80; // Add padding bit
         }
-        
+
         // Encrypt block
         cipher.encrypt_block((&mut x).into());
     }
@@ -195,21 +195,21 @@ pub fn compute_join_request_mic(key: &AESKey, data: &[u8]) -> [u8; MIC_SIZE] {
     if data.len() > BLOCK_SIZE - 1 {
         let remaining = &data[BLOCK_SIZE - 1..];
         let k = (remaining.len() + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        
+
         for i in 0..k {
             let start = i * BLOCK_SIZE;
             let end = (start + BLOCK_SIZE).min(remaining.len());
-            
+
             // XOR with previous block
             for j in 0..end.saturating_sub(start) {
                 x[j] ^= remaining[start + j];
             }
-            
+
             // If this is the last block and it's not full, pad with zeros (already done by initialization)
             if i == k - 1 && end.saturating_sub(start) < BLOCK_SIZE {
                 x[end.saturating_sub(start)] ^= 0x80; // Add padding bit
             }
-            
+
             // Encrypt block
             cipher.encrypt_block((&mut x).into());
         }

@@ -82,12 +82,12 @@ impl PingSlotScheduler {
     }
 
     /// Update ping slot schedule
-    pub fn update_schedule(&mut self, config: &PingSlotConfig, beacon_time: u32) {
+    pub fn update_schedule(&mut self, config: &PingSlotConfig, _beacon_time: u32) {
         self.slots.clear();
-        
+
         let num_slots = config.slots_per_beacon();
         let beacon_reserved = 2_120; // ms
-        
+
         // Calculate ping slots using device address as randomization seed
         for i in 0..num_slots {
             let slot_time = beacon_reserved + self.calculate_slot_offset(i);
@@ -99,9 +99,14 @@ impl PingSlotScheduler {
 
     /// Calculate randomized slot offset
     fn calculate_slot_offset(&self, slot_index: u32) -> u32 {
-        // Use hash of (dev_addr, beacon_time, slot_index) for randomization
+        // Base offset ensures minimum spacing (40ms)
+        let base_offset = slot_index * 40;
+
+        // Add random offset that won't violate minimum spacing
         let hash = self.rand_seed.wrapping_mul(slot_index.wrapping_add(1));
-        (hash % 1000).wrapping_add(slot_index * 30)
+        let random_offset = hash % 5;
+
+        base_offset.saturating_add(random_offset)
     }
 
     /// Get next ping slot time
@@ -136,9 +141,17 @@ mod tests {
 
         // Verify slot spacing
         let mut last_slot = 0;
-        for slot in scheduler.slots.iter() {
-            assert!(*slot >= last_slot + 30); // Minimum 30ms between slots
-            last_slot = *slot;
+        for (i, &slot) in scheduler.slots.iter().enumerate() {
+            let spacing = slot.saturating_sub(last_slot);
+            assert!(
+                slot >= last_slot + 30,
+                "Slot {} has insufficient spacing: {} ms (slot time: {}, last slot: {})",
+                i,
+                spacing,
+                slot,
+                last_slot
+            );
+            last_slot = slot;
         }
     }
 
@@ -156,4 +169,4 @@ mod tests {
             assert!(scheduler.next_slot(first_slot).unwrap() > first_slot);
         }
     }
-} 
+}

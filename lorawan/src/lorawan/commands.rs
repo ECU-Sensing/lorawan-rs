@@ -244,74 +244,99 @@ impl MacCommand {
     pub fn process<E>(&self) -> Result<Option<MacCommand>, MacError<E>> {
         match self {
             MacCommand::LinkCheckReq => Ok(None),
-            MacCommand::LinkCheckAns { margin: _, gateway_count: _ } => Ok(None),
-            MacCommand::LinkADRReq { data_rate, tx_power, ch_mask: _, ch_mask_cntl: _, nb_trans: _ } => {
+            MacCommand::LinkCheckAns {
+                margin: _,
+                gateway_count: _,
+            } => Ok(None),
+            MacCommand::LinkADRReq {
+                data_rate,
+                tx_power,
+                ch_mask: _,
+                ch_mask_cntl: _,
+                nb_trans: _,
+            } => {
                 // Validate parameters before processing
                 if *data_rate > 15 || *tx_power > 15 {
                     return Err(MacError::InvalidValue);
                 }
-                
+
                 Ok(Some(MacCommand::LinkADRAns {
                     power_ack: true,
                     data_rate_ack: true,
                     channel_mask_ack: true,
                 }))
-            },
+            }
             MacCommand::DutyCycleReq { max_duty_cycle: _ } => Ok(Some(MacCommand::DutyCycleAns)),
-            MacCommand::RXParamSetupReq { rx1_dr_offset, rx2_data_rate, freq: _ } => {
+            MacCommand::RXParamSetupReq {
+                rx1_dr_offset,
+                rx2_data_rate,
+                freq: _,
+            } => {
                 // Validate parameters
                 if *rx1_dr_offset > 7 || *rx2_data_rate > 15 {
                     return Err(MacError::InvalidValue);
                 }
-                
+
                 Ok(Some(MacCommand::RXParamSetupAns {
                     rx1_dr_offset_ack: true,
                     rx2_data_rate_ack: true,
                     channel_ack: true,
                 }))
-            },
+            }
             MacCommand::DevStatusReq => {
                 Ok(Some(MacCommand::DevStatusAns {
                     battery: 255, // Unknown by default
-                    margin: 0,   // 0 dB by default
+                    margin: 0,    // 0 dB by default
                 }))
-            },
-            MacCommand::NewChannelReq { ch_index: _, freq: _, max_dr, min_dr } => {
+            }
+            MacCommand::NewChannelReq {
+                ch_index: _,
+                freq: _,
+                max_dr,
+                min_dr,
+            } => {
                 // Validate parameters
                 if *max_dr > 15 || *min_dr > 15 || *min_dr > *max_dr {
                     return Err(MacError::InvalidValue);
                 }
-                
+
                 Ok(Some(MacCommand::NewChannelAns {
                     channel_freq_ok: true,
                     data_rate_ok: true,
                 }))
-            },
+            }
             MacCommand::RXTimingSetupReq { delay } => {
                 if *delay > 15 {
                     return Err(MacError::InvalidValue);
                 }
                 Ok(Some(MacCommand::RXTimingSetupAns))
-            },
-            MacCommand::TxParamSetupReq { downlink_dwell_time: _, uplink_dwell_time: _, max_eirp: _ } => {
+            }
+            MacCommand::TxParamSetupReq {
+                downlink_dwell_time: _,
+                uplink_dwell_time: _,
+                max_eirp: _,
+            } => {
                 // Not implemented in most regions
                 Err(MacError::UnknownCommand)
-            },
-            MacCommand::DlChannelReq { ch_index: _, freq: _ } => {
+            }
+            MacCommand::DlChannelReq {
+                ch_index: _,
+                freq: _,
+            } => {
                 // Not implemented in most regions
                 Err(MacError::UnknownCommand)
-            },
-            MacCommand::LinkADRAns { .. } |
-            MacCommand::DutyCycleAns |
-            MacCommand::RXParamSetupAns { .. } |
-            MacCommand::DevStatusAns { .. } |
-            MacCommand::NewChannelAns { .. } |
-            MacCommand::RXTimingSetupAns |
-            MacCommand::TxParamSetupAns |
-            MacCommand::DlChannelAns { .. } => {
+            }
+            MacCommand::LinkADRAns { .. }
+            | MacCommand::DutyCycleAns
+            | MacCommand::RXParamSetupAns { .. }
+            | MacCommand::DevStatusAns { .. }
+            | MacCommand::NewChannelAns { .. }
+            | MacCommand::RXTimingSetupAns
+            | MacCommand::TxParamSetupAns
+            | MacCommand::DlChannelAns { .. } => {
                 // These are answers, not requests - they don't need processing
                 Ok(None)
-            },
+            }
         }
     }
 }

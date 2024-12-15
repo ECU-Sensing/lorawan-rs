@@ -398,13 +398,22 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
                 // Queue a link check request to be sent in the next uplink
                 self.queue_mac_command(MacCommand::LinkCheckReq)
             }
-            MacCommand::LinkCheckAns { margin, gateway_count } => {
+            MacCommand::LinkCheckAns {
+                margin,
+                gateway_count,
+            } => {
                 // Store link quality information for application use
                 // Margin is the link margin in dB of the last successful uplink
                 // Gateway count is the number of gateways that received the uplink
                 Ok(())
             }
-            MacCommand::LinkADRReq { data_rate, tx_power, ch_mask, ch_mask_cntl, nb_trans } => {
+            MacCommand::LinkADRReq {
+                data_rate,
+                tx_power,
+                ch_mask,
+                ch_mask_cntl,
+                nb_trans,
+            } => {
                 let mut power_ack = false;
                 let mut data_rate_ack = false;
                 let mut channel_mask_ack = false;
@@ -439,7 +448,11 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
                     channel_mask_ack,
                 })
             }
-            MacCommand::LinkADRAns { power_ack, data_rate_ack, channel_mask_ack } => {
+            MacCommand::LinkADRAns {
+                power_ack,
+                data_rate_ack,
+                channel_mask_ack,
+            } => {
                 // Process response from end-device about ADR request
                 // If all acks are true, the device has successfully applied all changes
                 if power_ack && data_rate_ack && channel_mask_ack {
@@ -465,7 +478,11 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
                 // Acknowledgment of duty cycle request
                 Ok(())
             }
-            MacCommand::RXParamSetupReq { rx1_dr_offset, rx2_data_rate, freq } => {
+            MacCommand::RXParamSetupReq {
+                rx1_dr_offset,
+                rx2_data_rate,
+                freq,
+            } => {
                 let mut rx1_dr_offset_ack = false;
                 let mut rx2_data_rate_ack = false;
                 let mut channel_ack = false;
@@ -495,7 +512,11 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
                     channel_ack,
                 })
             }
-            MacCommand::RXParamSetupAns { rx1_dr_offset_ack, rx2_data_rate_ack, channel_ack } => {
+            MacCommand::RXParamSetupAns {
+                rx1_dr_offset_ack,
+                rx2_data_rate_ack,
+                channel_ack,
+            } => {
                 // Process response about RX parameter setup
                 if rx1_dr_offset_ack && rx2_data_rate_ack && channel_ack {
                     Ok(())
@@ -509,14 +530,22 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
                 // Margin: SNR of last received DevStatusReq [-32,31]
                 self.queue_mac_command(MacCommand::DevStatusAns {
                     battery: 0, // Example: external power
-                    margin: 0, // Example: 0 dB margin
+                    margin: 0,  // Example: 0 dB margin
                 })
             }
-            MacCommand::DevStatusAns { battery: _, margin: _ } => {
+            MacCommand::DevStatusAns {
+                battery: _,
+                margin: _,
+            } => {
                 // Process device status information
                 Ok(())
             }
-            MacCommand::NewChannelReq { ch_index, freq, min_dr, max_dr } => {
+            MacCommand::NewChannelReq {
+                ch_index,
+                freq,
+                min_dr,
+                max_dr,
+            } => {
                 let mut channel_freq_ok = false;
                 let mut data_rate_ok = false;
 
@@ -526,15 +555,19 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
                 }
 
                 // Validate data rate range
-                if self.region.is_valid_data_rate(min_dr) && 
-                   self.region.is_valid_data_rate(max_dr) && 
-                   min_dr <= max_dr {
+                if self.region.is_valid_data_rate(min_dr)
+                    && self.region.is_valid_data_rate(max_dr)
+                    && min_dr <= max_dr
+                {
                     data_rate_ok = true;
                 }
 
                 // If valid, create new channel
                 if channel_freq_ok && data_rate_ok {
-                    // Create and store new channel configuration
+                    // Validate channel index
+                    if ch_index as usize >= self.region.get_max_channels() {
+                        return Err(MacError::InvalidChannel);
+                    }
                 }
 
                 // Queue acknowledgment
@@ -543,7 +576,10 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
                     data_rate_ok,
                 })
             }
-            MacCommand::NewChannelAns { channel_freq_ok, data_rate_ok } => {
+            MacCommand::NewChannelAns {
+                channel_freq_ok,
+                data_rate_ok,
+            } => {
                 // Process response about new channel creation
                 if channel_freq_ok && data_rate_ok {
                     Ok(())
@@ -567,11 +603,21 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
                 // Acknowledgment of RX timing setup
                 Ok(())
             }
-            MacCommand::TxParamSetupReq { downlink_dwell_time, uplink_dwell_time, max_eirp } => {
+            MacCommand::TxParamSetupReq {
+                downlink_dwell_time,
+                uplink_dwell_time,
+                max_eirp,
+            } => {
                 // Set TX parameters
-                // Store dwell times and maximum EIRP
                 if max_eirp <= 15 {
-                    // Store parameters
+                    // Store dwell time settings locally
+                    let _dl_dwell = downlink_dwell_time;
+                    let _ul_dwell = uplink_dwell_time;
+
+                    // Convert max_eirp to dBm: 2 dBm steps starting from 8 dBm
+                    let eirp_dbm = 8 + (2 * max_eirp as u32);
+                    self.phy.radio.set_tx_power(eirp_dbm as i8)?;
+
                     self.queue_mac_command(MacCommand::TxParamSetupAns)
                 } else {
                     Err(MacError::InvalidValue)
@@ -608,7 +654,10 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
                     uplink_freq_exists,
                 })
             }
-            MacCommand::DlChannelAns { channel_freq_ok, uplink_freq_exists } => {
+            MacCommand::DlChannelAns {
+                channel_freq_ok,
+                uplink_freq_exists,
+            } => {
                 // Process response about downlink channel modification
                 if channel_freq_ok && uplink_freq_exists {
                     Ok(())
@@ -632,16 +681,22 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
         buffer.push(0x00).map_err(|_| MacError::BufferTooSmall)?;
 
         // Add AppEUI (Little Endian)
-        buffer.extend_from_slice(&app_eui).map_err(|_| MacError::BufferTooSmall)?;
+        buffer
+            .extend_from_slice(&app_eui)
+            .map_err(|_| MacError::BufferTooSmall)?;
 
         // Add DevEUI (Little Endian)
-        buffer.extend_from_slice(&dev_eui).map_err(|_| MacError::BufferTooSmall)?;
+        buffer
+            .extend_from_slice(&dev_eui)
+            .map_err(|_| MacError::BufferTooSmall)?;
 
         // Generate random DevNonce
         let dev_nonce = {
             let mut nonce = [0u8; 2];
             // Use last channel as entropy source
-            let entropy = self.region.get_next_channel()
+            let entropy = self
+                .region
+                .get_next_channel()
                 .map(|c| c.frequency)
                 .unwrap_or(0);
             nonce[0] = (entropy & 0xFF) as u8;
@@ -650,14 +705,20 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
         };
 
         // Add DevNonce
-        buffer.extend_from_slice(&dev_nonce).map_err(|_| MacError::BufferTooSmall)?;
+        buffer
+            .extend_from_slice(&dev_nonce)
+            .map_err(|_| MacError::BufferTooSmall)?;
 
         // Calculate and add MIC
         let mic = crypto::compute_join_request_mic(&app_key, &buffer);
-        buffer.extend_from_slice(&mic).map_err(|_| MacError::BufferTooSmall)?;
+        buffer
+            .extend_from_slice(&mic)
+            .map_err(|_| MacError::BufferTooSmall)?;
 
         // Get next channel for transmission
-        let channel = self.region.get_next_channel()
+        let channel = self
+            .region
+            .get_next_channel()
             .ok_or(MacError::InvalidChannel)?;
 
         // Configure radio for transmission
@@ -668,11 +729,8 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
 
         // Configure RX1 window for join accept
         let (rx1_freq, rx1_dr) = self.region.rx1_window(&channel);
-        self.phy.configure_rx::<REG>(
-            rx1_freq,
-            rx1_dr,
-            self.region.join_accept_delay1(),
-        )?;
+        self.phy
+            .configure_rx::<REG>(rx1_freq, rx1_dr, self.region.join_accept_delay1())?;
 
         Ok(())
     }
@@ -716,22 +774,27 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
 
     fn handle_mac_command(&mut self, command: MacCommand) -> Result<(), MacError<R::Error>> {
         match command {
-            MacCommand::LinkCheckReq |
-            MacCommand::LinkCheckAns { .. } |
-            MacCommand::LinkADRReq { .. } |
-            MacCommand::LinkADRAns { .. } |
-            MacCommand::DutyCycleReq { .. } |
-            MacCommand::DutyCycleAns |
-            MacCommand::RXParamSetupReq { .. } |
-            MacCommand::RXParamSetupAns { .. } |
-            MacCommand::DevStatusReq |
-            MacCommand::DevStatusAns { .. } |
-            MacCommand::NewChannelAns { .. } |
-            MacCommand::RXTimingSetupAns |
-            MacCommand::TxParamSetupAns |
-            MacCommand::DlChannelAns { .. } => Ok(()),
+            MacCommand::LinkCheckReq
+            | MacCommand::LinkCheckAns { .. }
+            | MacCommand::LinkADRReq { .. }
+            | MacCommand::LinkADRAns { .. }
+            | MacCommand::DutyCycleReq { .. }
+            | MacCommand::DutyCycleAns
+            | MacCommand::RXParamSetupReq { .. }
+            | MacCommand::RXParamSetupAns { .. }
+            | MacCommand::DevStatusReq
+            | MacCommand::DevStatusAns { .. }
+            | MacCommand::NewChannelAns { .. }
+            | MacCommand::RXTimingSetupAns
+            | MacCommand::TxParamSetupAns
+            | MacCommand::DlChannelAns { .. } => Ok(()),
 
-            MacCommand::NewChannelReq { ch_index, freq, min_dr: _, max_dr: _ } => {
+            MacCommand::NewChannelReq {
+                ch_index,
+                freq,
+                min_dr: _,
+                max_dr: _,
+            } => {
                 // Validate and configure new channel
                 if !self.region.is_valid_frequency(freq) {
                     return Err(MacError::InvalidFrequency);
@@ -740,36 +803,38 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
                     return Err(MacError::InvalidChannel);
                 }
                 Ok(())
-            },
+            }
             MacCommand::RXTimingSetupReq { delay } => {
                 // RX1 delay is in seconds, 0 means 1 second
                 let rx1_delay = if delay == 0 { 1 } else { delay as u32 };
-                
+
                 // Configure PHY layer with new timing
                 self.phy.config.timing.rx1_delay = rx1_delay;
                 self.phy.config.timing.rx2_delay = rx1_delay + 1;
 
                 // Send acknowledgment
                 self.queue_mac_command(MacCommand::RXTimingSetupAns)
-            },
-            MacCommand::TxParamSetupReq { downlink_dwell_time, uplink_dwell_time, max_eirp } => {
-                // Store dwell time settings
-                // These affect the maximum payload size and time-on-air
-                let _dl_dwell = downlink_dwell_time;
-                let _ul_dwell = uplink_dwell_time;
+            }
+            MacCommand::TxParamSetupReq {
+                downlink_dwell_time,
+                uplink_dwell_time,
+                max_eirp,
+            } => {
+                // Set TX parameters
+                if max_eirp <= 15 {
+                    // Store dwell time settings locally
+                    let _dl_dwell = downlink_dwell_time;
+                    let _ul_dwell = uplink_dwell_time;
 
-                // Convert max_eirp to dBm: 2 dBm steps starting from 8 dBm
-                let eirp_dbm = 8 + (2 * max_eirp as u32);
-                if eirp_dbm > 36 {
-                    return Err(MacError::InvalidValue);
+                    // Convert max_eirp to dBm: 2 dBm steps starting from 8 dBm
+                    let eirp_dbm = 8 + (2 * max_eirp as u32);
+                    self.phy.radio.set_tx_power(eirp_dbm as i8)?;
+
+                    self.queue_mac_command(MacCommand::TxParamSetupAns)
+                } else {
+                    Err(MacError::InvalidValue)
                 }
-
-                // Configure radio with new TX power
-                self.phy.radio.set_tx_power(eirp_dbm as i8)?;
-
-                // Send acknowledgment
-                self.queue_mac_command(MacCommand::TxParamSetupAns)
-            },
+            }
             MacCommand::DlChannelReq { ch_index, freq } => {
                 let mut channel_freq_ok = false;
                 let mut uplink_freq_exists = false;
@@ -791,7 +856,7 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
                     channel_freq_ok,
                     uplink_freq_exists,
                 })
-            },
+            }
         }
     }
 

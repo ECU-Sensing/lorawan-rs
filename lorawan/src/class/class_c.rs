@@ -96,7 +96,11 @@ where
     }
 
     /// Configure RX2 window parameters
-    pub fn configure_rx2(&mut self, frequency: u32, data_rate: u8) -> Result<(), MacError<R::Error>> {
+    pub fn configure_rx2(
+        &mut self,
+        frequency: u32,
+        data_rate: u8,
+    ) -> Result<(), MacError<R::Error>> {
         self.rx2_frequency = frequency;
         self.rx2_data_rate = data_rate;
         self.resume_rx2()
@@ -134,7 +138,7 @@ where
     /// Update power state
     pub fn update_power_state(&mut self, battery_level: u8) {
         self.power_state.battery_level = battery_level;
-        
+
         // Enable power saving if battery is low
         if self.power_state.is_battery_low() {
             self.power_state.power_save = true;
@@ -151,7 +155,7 @@ where
     /// Handle radio errors with automatic recovery
     fn handle_radio_error(&mut self, error: MacError<R::Error>) -> Result<(), MacError<R::Error>> {
         self.recovery_attempts += 1;
-        
+
         if self.recovery_attempts > 3 {
             // Too many recovery attempts, return error
             self.recovery_attempts = 0;
@@ -190,7 +194,7 @@ where
 
                 // Process received data
                 let payload = self.mac.decrypt_payload(&buffer[..len])?;
-                
+
                 // Handle MAC commands if present
                 if let Some(port) = payload.first() {
                     if *port == 0 {
@@ -214,7 +218,12 @@ where
         Ok(())
     }
 
-    fn send_data(&mut self, port: u8, data: &[u8], confirmed: bool) -> Result<(), MacError<R::Error>> {
+    fn send_data(
+        &mut self,
+        port: u8,
+        data: &[u8],
+        confirmed: bool,
+    ) -> Result<(), MacError<R::Error>> {
         // Suspend RX2 during transmission
         self.suspend_rx();
 

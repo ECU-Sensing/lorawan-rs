@@ -57,7 +57,12 @@ impl<R: Radio, REG: Region> DeviceClass<R, REG> for ClassA<R, REG> {
         Ok(())
     }
 
-    fn send_data(&mut self, port: u8, data: &[u8], confirmed: bool) -> Result<(), MacError<R::Error>> {
+    fn send_data(
+        &mut self,
+        port: u8,
+        data: &[u8],
+        confirmed: bool,
+    ) -> Result<(), MacError<R::Error>> {
         if confirmed {
             self.mac.send_confirmed(port, data)
         } else {

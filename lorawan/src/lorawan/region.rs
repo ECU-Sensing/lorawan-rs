@@ -224,8 +224,15 @@ impl US915 {
 
         // Enable only channels in the selected sub-band
         for (i, channel) in self.channels.iter_mut().enumerate() {
-            let channel_sub_band = (i / 8) as u8;
-            channel.enabled = channel_sub_band == self.sub_band;
+            if i < 64 {
+                // 125 kHz channels (0-63)
+                let channel_sub_band = (i / 8) as u8;
+                channel.enabled = channel_sub_band == self.sub_band;
+            } else {
+                // 500 kHz channels (64-71)
+                let channel_sub_band = (i - 64) as u8;
+                channel.enabled = channel_sub_band == self.sub_band;
+            }
         }
     }
 
@@ -399,7 +406,7 @@ impl Region for US915 {
         // US915 uses ch_mask_cntl 0-4 for 125 kHz channels
         // and ch_mask_cntl 5 for 500 kHz channels
         match ch_mask_cntl {
-            0..=4 => true, // All masks valid for 125 kHz channels
+            0..=4 => true,             // All masks valid for 125 kHz channels
             5 => ch_mask & !0xFF == 0, // Only first 8 bits valid for 500 kHz channels
             _ => false,
         }

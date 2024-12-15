@@ -1,5 +1,5 @@
 //! LoRaWAN protocol implementation in Rust
-//! 
+//!
 //! This crate provides a pure Rust implementation of the LoRaWAN protocol stack.
 //! It supports Class A, B, and C devices, OTAA and ABP activation, and implements
 //! the LoRaWAN 1.0.3 specification.
@@ -13,14 +13,12 @@
 //! - No unsafe code
 //!
 //! # Example
-//! ```no_run
+//! ```ignore
 //! use lorawan::{
 //!     config::device::{DeviceConfig, AESKey},
-//!     device::Device,
-//!     lorawan::{
-//!         class::OperatingMode,
-//!         region::US915,
-//!     },
+//!     device::LoRaWANDevice,
+//!     class::OperatingMode,
+//!     lorawan::region::US915,
 //! };
 //!
 //! // Create device configuration
@@ -33,16 +31,15 @@
 //! // Create region configuration
 //! let region = US915::new();
 //!
-//! // Create device (radio implementation omitted)
-//! # let radio = ();
-//! # let mut device = Device::new(radio, config, region, OperatingMode::ClassA).unwrap();
+//! // Create device with radio (implementation not shown)
+//! let mut device = LoRaWANDevice::new(radio, config, region, OperatingMode::ClassA).unwrap();
 //!
 //! // Join network
-//! device.join_otaa().unwrap();
+//! device.join_otaa([0x00; 8], [0x00; 8], AESKey::new([0x00; 16])).unwrap();
 //!
 //! // Send data
 //! let data = b"Hello, LoRaWAN!";
-//! device.send_unconfirmed(1, data).unwrap();
+//! device.send_data(1, data, false).unwrap();
 //! ```
 
 #![warn(missing_docs)]

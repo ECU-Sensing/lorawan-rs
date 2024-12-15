@@ -134,11 +134,7 @@ impl SessionState {
     }
 
     /// Create a new session state from OTAA join response
-    pub fn from_join_accept(
-        dev_addr: DevAddr,
-        nwk_skey: AESKey,
-        app_skey: AESKey,
-    ) -> Self {
+    pub fn from_join_accept(dev_addr: DevAddr, nwk_skey: AESKey, app_skey: AESKey) -> Self {
         Self {
             dev_addr,
             nwk_skey,
@@ -157,8 +153,8 @@ impl SessionState {
     /// Check if session is active (has valid keys)
     pub fn is_active(&self) -> bool {
         // Check if keys are non-zero
-        !self.nwk_skey.as_bytes().iter().all(|&x| x == 0) &&
-        !self.app_skey.as_bytes().iter().all(|&x| x == 0)
+        !self.nwk_skey.as_bytes().iter().all(|&x| x == 0)
+            && !self.app_skey.as_bytes().iter().all(|&x| x == 0)
     }
 
     /// Check if device is joined to network

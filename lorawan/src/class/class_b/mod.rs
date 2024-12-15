@@ -11,21 +11,20 @@ pub mod ping_slot;
 pub mod timing;
 
 use crate::{
-    radio::traits::Radio,
-    lorawan::{
-        region::{Region, DataRate},
-        mac::{MacLayer, MacError},
-    },
     class::{DeviceClass, OperatingMode},
     config::device::{AESKey, SessionState},
+    lorawan::{
+        mac::{MacError, MacLayer},
+        region::{DataRate, Region},
+    },
+    radio::traits::Radio,
 };
 
 use self::{
-    beacon::{BeaconTracker, BeaconState},
+    beacon::{BeaconState, BeaconTracker},
     ping_slot::{PingSlotConfig, PingSlotScheduler},
     timing::NetworkTime,
 };
-
 
 /// Maximum number of ping slots per beacon period
 const MAX_PING_SLOTS: usize = 16;
@@ -70,7 +69,8 @@ impl<R: Radio + Clone, REG: Region> ClassB<R, REG> {
 
         // Update network time if beacon synchronized
         if self.beacon_tracker.is_synchronized() {
-            self.network_time.update(self.beacon_tracker.last_beacon_time());
+            self.network_time
+                .update(self.beacon_tracker.last_beacon_time());
         }
 
         // Process ping slots if synchronized
@@ -84,17 +84,15 @@ impl<R: Radio + Clone, REG: Region> ClassB<R, REG> {
     /// Configure ping slot parameters
     pub fn configure_ping_slots(&mut self, periodicity: u8) -> Result<(), MacError<R::Error>> {
         self.ping_slot_config.set_periodicity(periodicity);
-        self.ping_scheduler.update_schedule(
-            &self.ping_slot_config,
-            self.network_time.current_time(),
-        );
+        self.ping_scheduler
+            .update_schedule(&self.ping_slot_config, self.network_time.current_time());
         Ok(())
     }
 
     /// Process ping slots
     fn process_ping_slots(&mut self) -> Result<(), MacError<R::Error>> {
         let current_time = self.network_time.current_time();
-        
+
         // Check if we need to open a ping slot
         if let Some(slot) = self.ping_scheduler.next_slot(current_time) {
             self.open_ping_slot(slot)?;
@@ -104,7 +102,7 @@ impl<R: Radio + Clone, REG: Region> ClassB<R, REG> {
     }
 
     /// Open a ping receive slot
-    fn open_ping_slot(&mut self, slot: u32) -> Result<(), MacError<R::Error>> {
+    fn open_ping_slot(&mut self, _slot: u32) -> Result<(), MacError<R::Error>> {
         // Configure radio for ping slot reception
         self.mac.set_rx_config(
             self.ping_slot_config.frequency(),
@@ -160,4 +158,4 @@ impl<R: Radio + Clone, REG: Region> DeviceClass<R, REG> for ClassB<R, REG> {
     fn get_mac_layer(&self) -> &MacLayer<R, REG> {
         &self.mac
     }
-} 
+}

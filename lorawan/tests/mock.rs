@@ -41,6 +41,14 @@ impl MockRadio {
         self.rx_data = Some(rx_data);
     }
 
+    /// Simulate join accept timing
+    pub fn simulate_join_accept(&mut self, data: &[u8]) {
+        // Store data for RX1 window
+        self.set_rx_data(data);
+        // Set time to RX1 window
+        self.time_counter = 5000; // 5 seconds, typical RX1 delay
+    }
+
     /// Get last transmitted data
     pub fn get_last_tx(&self) -> Option<&[u8]> {
         self.last_tx.as_ref().map(|v| v.as_slice())

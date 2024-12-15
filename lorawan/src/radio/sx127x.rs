@@ -105,7 +105,12 @@ where
     }
 
     /// Read register
-    fn read_register(&mut self, addr: u8, buffer: &mut [u8], len: usize) -> Result<(), SX127xError<E, CSE, RESETE>> {
+    fn read_register(
+        &mut self,
+        addr: u8,
+        buffer: &mut [u8],
+        len: usize,
+    ) -> Result<(), SX127xError<E, CSE, RESETE>> {
         // Set CS low to start transaction
         self.cs.set_low().map_err(SX127xError::Cs)?;
 
@@ -144,18 +149,18 @@ where
     fn read_fifo(&mut self, buffer: &mut [u8]) -> Result<(), SX127xError<E, CSE, RESETE>> {
         // Read FIFO data into buffer
         self.cs.set_low().map_err(SX127xError::Cs)?;
-        
+
         // First byte is the FIFO read command
         let mut read_cmd = [0x00];
         self.spi.transfer(&mut read_cmd).map_err(SX127xError::Spi)?;
-        
+
         // Read the actual data
         for byte in buffer.iter_mut() {
             let mut rx_byte = [0x00];
             self.spi.transfer(&mut rx_byte).map_err(SX127xError::Spi)?;
             *byte = rx_byte[0];
         }
-        
+
         self.cs.set_high().map_err(SX127xError::Cs)?;
         Ok(())
     }
@@ -171,7 +176,8 @@ where
     }
 }
 
-impl<SPI, CS, RESET, BUSY, DIO0, DIO1, E, CSE, RESETE> Radio for SX127x<SPI, CS, RESET, BUSY, DIO0, DIO1>
+impl<SPI, CS, RESET, BUSY, DIO0, DIO1, E, CSE, RESETE> Radio
+    for SX127x<SPI, CS, RESET, BUSY, DIO0, DIO1>
 where
     SPI: Transfer<u8, Error = E> + Write<u8, Error = E>,
     CS: OutputPin<Error = CSE>,

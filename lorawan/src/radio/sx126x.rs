@@ -1,8 +1,8 @@
 #[cfg(feature = "sx126x")]
 use embedded_hal::{
+    blocking::delay::DelayMs,
     blocking::spi::{Transfer, Write},
     digital::v2::{InputPin, OutputPin},
-    blocking::delay::DelayMs,
 };
 
 #[cfg(feature = "sx126x")]

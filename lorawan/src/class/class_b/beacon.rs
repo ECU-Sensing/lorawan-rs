@@ -6,11 +6,11 @@
 //! - Beacon loss detection and recovery
 
 use crate::{
-    radio::traits::Radio,
     lorawan::{
+        mac::{MacError, MacLayer},
         region::Region,
-        mac::{MacLayer, MacError},
     },
+    radio::traits::Radio,
 };
 
 /// Beacon timing parameters (all times in milliseconds)
@@ -65,9 +65,11 @@ impl BeaconTracker {
         mac: &mut MacLayer<R, REG>,
     ) -> Result<(), MacError<R::Error>> {
         // Configure radio for beacon reception
-        let beacon_channel = mac.get_region_mut().get_next_beacon_channel()
+        let beacon_channel = mac
+            .get_region_mut()
+            .get_next_beacon_channel()
             .ok_or(MacError::InvalidChannel)?;
-            
+
         mac.set_rx_config(
             beacon_channel.frequency,
             beacon_channel.min_dr,
@@ -121,7 +123,7 @@ impl BeaconTracker {
         mac: &mut MacLayer<R, REG>,
     ) -> Result<(), MacError<R::Error>> {
         let current_time = mac.get_time();
-        
+
         // Check if we're in beacon window
         if self.is_beacon_window(current_time) {
             if let Some(beacon) = self.receive_beacon(mac)? {
@@ -145,11 +147,13 @@ impl BeaconTracker {
     ) -> Result<(), MacError<R::Error>> {
         // Widen search window
         let search_window = BEACON_WINDOW + 2 * BEACON_GUARD;
-        
+
         // Configure radio with wider window
-        let beacon_channel = mac.get_region_mut().get_next_beacon_channel()
+        let beacon_channel = mac
+            .get_region_mut()
+            .get_next_beacon_channel()
             .ok_or(MacError::InvalidChannel)?;
-            
+
         mac.set_rx_config(
             beacon_channel.frequency,
             beacon_channel.min_dr,
@@ -172,7 +176,7 @@ impl BeaconTracker {
         let time_since_beacon = current_time.wrapping_sub(self.last_beacon_time);
         let window_start = BEACON_INTERVAL - BEACON_GUARD;
         let window_end = BEACON_INTERVAL + BEACON_GUARD;
-        
+
         time_since_beacon >= window_start && time_since_beacon <= window_end
     }
 
@@ -180,7 +184,7 @@ impl BeaconTracker {
     fn update_timing(&mut self, beacon_time: u32) {
         let expected_time = self.last_beacon_time.wrapping_add(BEACON_INTERVAL);
         let drift = beacon_time.wrapping_sub(expected_time) as i32;
-        
+
         // Update timing drift using exponential moving average
         self.timing_drift = (self.timing_drift * 7 + drift) / 8;
         self.last_beacon_time = beacon_time;
@@ -214,12 +218,10 @@ impl BeaconTracker {
     ) -> Result<Option<BeaconData>, MacError<R::Error>> {
         let mut buffer = [0u8; 17]; // Beacon size is 17 bytes
         match mac.receive(&mut buffer) {
-            Ok(size) if size == 17 => {
-                Ok(Some(BeaconData {
-                    time: mac.get_time(),
-                    info: buffer,
-                }))
-            }
+            Ok(size) if size == 17 => Ok(Some(BeaconData {
+                time: mac.get_time(),
+                info: buffer,
+            })),
             Ok(_) => Ok(None),
             Err(e) => Err(e),
         }
@@ -231,4 +233,4 @@ impl BeaconTracker {
 struct BeaconData {
     time: u32,
     info: [u8; 17],
-} 
+}
