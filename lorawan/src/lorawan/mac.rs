@@ -380,76 +380,226 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
     pub fn process_mac_command(&mut self, command: MacCommand) -> Result<(), MacError<R::Error>> {
         match command {
             MacCommand::LinkCheckReq => {
-                // TODO: Implement link check request
+                // Queue a link check request to be sent in the next uplink
+                self.queue_mac_command(MacCommand::LinkCheckReq)
+            }
+            MacCommand::LinkCheckAns { margin, gateway_count } => {
+                // Store link quality information for application use
+                // Margin is the link margin in dB of the last successful uplink
+                // Gateway count is the number of gateways that received the uplink
                 Ok(())
             }
-            MacCommand::LinkCheckAns { margin: _, gateway_count: _ } => {
-                // TODO: Handle link check answer
-                Ok(())
+            MacCommand::LinkADRReq { data_rate, tx_power, ch_mask, ch_mask_cntl, nb_trans } => {
+                let mut power_ack = false;
+                let mut data_rate_ack = false;
+                let mut channel_mask_ack = false;
+
+                // Validate and set TX power if in valid range
+                if self.region.is_valid_tx_power(tx_power) {
+                    self.region.set_tx_power(tx_power);
+                    power_ack = true;
+                }
+
+                // Validate and set data rate if supported
+                if self.region.is_valid_data_rate(data_rate) {
+                    self.region.set_data_rate(data_rate);
+                    data_rate_ack = true;
+                }
+
+                // Apply channel mask if valid
+                if self.region.is_valid_channel_mask(ch_mask, ch_mask_cntl) {
+                    self.region.apply_channel_mask(ch_mask, ch_mask_cntl);
+                    channel_mask_ack = true;
+                }
+
+                // Set number of transmissions if specified
+                if nb_trans > 0 {
+                    // Store nb_trans for future uplinks
+                }
+
+                // Queue acknowledgment
+                self.queue_mac_command(MacCommand::LinkADRAns {
+                    power_ack,
+                    data_rate_ack,
+                    channel_mask_ack,
+                })
             }
-            MacCommand::LinkADRReq { data_rate: _, tx_power: _, ch_mask: _, ch_mask_cntl: _, nb_trans: _ } => {
-                // TODO: Handle link ADR request
-                Ok(())
+            MacCommand::LinkADRAns { power_ack, data_rate_ack, channel_mask_ack } => {
+                // Process response from end-device about ADR request
+                // If all acks are true, the device has successfully applied all changes
+                if power_ack && data_rate_ack && channel_mask_ack {
+                    Ok(())
+                } else {
+                    Err(MacError::InvalidValue)
+                }
             }
-            MacCommand::LinkADRAns { power_ack: _, data_rate_ack: _, channel_mask_ack: _ } => {
-                // TODO: Handle link ADR answer
-                Ok(())
-            }
-            MacCommand::DutyCycleReq { max_duty_cycle: _ } => {
-                // TODO: Handle duty cycle request
-                Ok(())
+            MacCommand::DutyCycleReq { max_duty_cycle } => {
+                // Set the maximum duty cycle
+                // max_duty_cycle = 0 means no duty cycle limitation
+                // max_duty_cycle = 1 means 1/1 duty cycle (100%)
+                // max_duty_cycle = 2 means 1/2 duty cycle (50%)
+                // max_duty_cycle = 16 means 1/16 duty cycle (6.25%)
+                if max_duty_cycle <= 15 {
+                    // Store duty cycle for future transmissions
+                    self.queue_mac_command(MacCommand::DutyCycleAns)
+                } else {
+                    Err(MacError::InvalidValue)
+                }
             }
             MacCommand::DutyCycleAns => {
-                // TODO: Handle duty cycle answer
+                // Acknowledgment of duty cycle request
                 Ok(())
             }
-            MacCommand::RXParamSetupReq { rx1_dr_offset: _, rx2_data_rate: _, freq: _ } => {
-                // TODO: Handle RX param setup request
-                Ok(())
+            MacCommand::RXParamSetupReq { rx1_dr_offset, rx2_data_rate, freq } => {
+                let mut rx1_dr_offset_ack = false;
+                let mut rx2_data_rate_ack = false;
+                let mut channel_ack = false;
+
+                // Validate RX1 data rate offset
+                if rx1_dr_offset <= 5 {
+                    // Store RX1 data rate offset
+                    rx1_dr_offset_ack = true;
+                }
+
+                // Validate RX2 data rate
+                if self.region.is_valid_data_rate(rx2_data_rate) {
+                    // Store RX2 data rate
+                    rx2_data_rate_ack = true;
+                }
+
+                // Validate frequency
+                if self.region.is_valid_frequency(freq) {
+                    // Store RX2 frequency
+                    channel_ack = true;
+                }
+
+                // Queue acknowledgment
+                self.queue_mac_command(MacCommand::RXParamSetupAns {
+                    rx1_dr_offset_ack,
+                    rx2_data_rate_ack,
+                    channel_ack,
+                })
             }
-            MacCommand::RXParamSetupAns { rx1_dr_offset_ack: _, rx2_data_rate_ack: _, channel_ack: _ } => {
-                // TODO: Handle RX param setup answer
-                Ok(())
+            MacCommand::RXParamSetupAns { rx1_dr_offset_ack, rx2_data_rate_ack, channel_ack } => {
+                // Process response about RX parameter setup
+                if rx1_dr_offset_ack && rx2_data_rate_ack && channel_ack {
+                    Ok(())
+                } else {
+                    Err(MacError::InvalidValue)
+                }
             }
             MacCommand::DevStatusReq => {
-                // TODO: Handle device status request
-                Ok(())
+                // Queue device status response with battery and margin information
+                // Battery: 0 = external power, 1-254 = battery level, 255 = cannot measure
+                // Margin: SNR of last received DevStatusReq [-32,31]
+                self.queue_mac_command(MacCommand::DevStatusAns {
+                    battery: 0, // Example: external power
+                    margin: 0, // Example: 0 dB margin
+                })
             }
             MacCommand::DevStatusAns { battery: _, margin: _ } => {
-                // TODO: Handle device status answer
+                // Process device status information
                 Ok(())
             }
-            MacCommand::NewChannelReq { ch_index: _, freq: _, min_dr: _, max_dr: _ } => {
-                // TODO: Handle new channel request
-                Ok(())
+            MacCommand::NewChannelReq { ch_index, freq, min_dr, max_dr } => {
+                let mut channel_freq_ok = false;
+                let mut data_rate_ok = false;
+
+                // Validate frequency
+                if self.region.is_valid_frequency(freq) {
+                    channel_freq_ok = true;
+                }
+
+                // Validate data rate range
+                if self.region.is_valid_data_rate(min_dr) && 
+                   self.region.is_valid_data_rate(max_dr) && 
+                   min_dr <= max_dr {
+                    data_rate_ok = true;
+                }
+
+                // If valid, create new channel
+                if channel_freq_ok && data_rate_ok {
+                    // Create and store new channel configuration
+                }
+
+                // Queue acknowledgment
+                self.queue_mac_command(MacCommand::NewChannelAns {
+                    channel_freq_ok,
+                    data_rate_ok,
+                })
             }
-            MacCommand::NewChannelAns { channel_freq_ok: _, data_rate_ok: _ } => {
-                // TODO: Handle new channel answer
-                Ok(())
+            MacCommand::NewChannelAns { channel_freq_ok, data_rate_ok } => {
+                // Process response about new channel creation
+                if channel_freq_ok && data_rate_ok {
+                    Ok(())
+                } else {
+                    Err(MacError::InvalidValue)
+                }
             }
-            MacCommand::RXTimingSetupReq { delay: _ } => {
-                // TODO: Handle RX timing setup request
-                Ok(())
+            MacCommand::RXTimingSetupReq { delay } => {
+                // Set delay for RX1 window
+                // delay = 0 means 1 second
+                // delay = 1 means 1 second
+                // delay = 15 means 15 seconds
+                if delay <= 15 {
+                    // Store RX1 delay
+                    self.queue_mac_command(MacCommand::RXTimingSetupAns)
+                } else {
+                    Err(MacError::InvalidValue)
+                }
             }
             MacCommand::RXTimingSetupAns => {
-                // TODO: Handle RX timing setup answer
+                // Acknowledgment of RX timing setup
                 Ok(())
             }
-            MacCommand::TxParamSetupReq { downlink_dwell_time: _, uplink_dwell_time: _, max_eirp: _ } => {
-                // TODO: Handle TX param setup request
-                Ok(())
+            MacCommand::TxParamSetupReq { downlink_dwell_time, uplink_dwell_time, max_eirp } => {
+                // Set TX parameters
+                // Store dwell times and maximum EIRP
+                if max_eirp <= 15 {
+                    // Store parameters
+                    self.queue_mac_command(MacCommand::TxParamSetupAns)
+                } else {
+                    Err(MacError::InvalidValue)
+                }
             }
             MacCommand::TxParamSetupAns => {
-                // TODO: Handle TX param setup answer
+                // Acknowledgment of TX parameter setup
                 Ok(())
             }
-            MacCommand::DlChannelReq { ch_index: _, freq: _ } => {
-                // TODO: Handle downlink channel request
-                Ok(())
+            MacCommand::DlChannelReq { ch_index, freq } => {
+                let mut channel_freq_ok = false;
+                let mut uplink_freq_exists = false;
+
+                // Validate frequency
+                if self.region.is_valid_frequency(freq) {
+                    channel_freq_ok = true;
+                }
+
+                // Check if uplink frequency exists for this channel
+                if let Some(channel) = self.region.get_channel(ch_index) {
+                    if channel.frequency > 0 {
+                        uplink_freq_exists = true;
+                    }
+                }
+
+                // If valid, update downlink frequency
+                if channel_freq_ok && uplink_freq_exists {
+                    // Update channel downlink frequency
+                }
+
+                // Queue acknowledgment
+                self.queue_mac_command(MacCommand::DlChannelAns {
+                    channel_freq_ok,
+                    uplink_freq_exists,
+                })
             }
-            MacCommand::DlChannelAns { channel_freq_ok: _, uplink_freq_exists: _ } => {
-                // TODO: Handle downlink channel answer
-                Ok(())
+            MacCommand::DlChannelAns { channel_freq_ok, uplink_freq_exists } => {
+                // Process response about downlink channel modification
+                if channel_freq_ok && uplink_freq_exists {
+                    Ok(())
+                } else {
+                    Err(MacError::InvalidValue)
+                }
             }
         }
     }

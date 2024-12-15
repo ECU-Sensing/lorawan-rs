@@ -84,8 +84,29 @@ pub trait Region: Any + Debug + Clone {
     /// Get maximum number of channels
     fn get_max_channels(&self) -> usize;
 
+    /// Get channel by index
+    fn get_channel(&self, index: u8) -> Option<&Channel>;
+
     /// Check if frequency is valid for this region
     fn is_valid_frequency(&self, frequency: u32) -> bool;
+
+    /// Check if data rate is valid for this region
+    fn is_valid_data_rate(&self, data_rate: u8) -> bool;
+
+    /// Set data rate
+    fn set_data_rate(&mut self, data_rate: u8);
+
+    /// Check if TX power is valid for this region
+    fn is_valid_tx_power(&self, tx_power: u8) -> bool;
+
+    /// Set TX power
+    fn set_tx_power(&mut self, tx_power: u8);
+
+    /// Check if channel mask is valid for this region
+    fn is_valid_channel_mask(&self, ch_mask: u16, ch_mask_cntl: u8) -> bool;
+
+    /// Apply channel mask to region
+    fn apply_channel_mask(&mut self, ch_mask: u16, ch_mask_cntl: u8);
 
     /// Get minimum frequency
     fn min_frequency(&self) -> u32;
@@ -233,8 +254,28 @@ impl Region for US915 {
         MAX_CHANNELS
     }
 
+    fn get_channel(&self, index: u8) -> Option<&Channel> {
+        self.channels.get(index as usize)
+    }
+
     fn is_valid_frequency(&self, frequency: u32) -> bool {
         frequency >= self.min_frequency() && frequency <= self.max_frequency()
+    }
+
+    fn is_valid_data_rate(&self, data_rate: u8) -> bool {
+        // US915 supports DR0-DR4 (SF10/125kHz to SF7/125kHz)
+        // and DR8-DR13 (SF12/500kHz to SF7/500kHz)
+        data_rate <= 4 || (data_rate >= 8 && data_rate <= 13)
+    }
+
+    fn is_valid_tx_power(&self, tx_power: u8) -> bool {
+        // US915 supports TX power from 0 to 14 dBm
+        tx_power <= 14
+    }
+
+    fn set_tx_power(&mut self, tx_power: u8) {
+        // Store TX power setting if needed
+        // Currently no state to maintain for TX power
     }
 
     fn min_frequency(&self) -> u32 {
@@ -346,5 +387,40 @@ impl Region for US915 {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+
+    fn set_data_rate(&mut self, data_rate: u8) {
+        if self.is_valid_data_rate(data_rate) {
+            self.data_rate = DataRate::from_index(data_rate);
+        }
+    }
+
+    fn is_valid_channel_mask(&self, ch_mask: u16, ch_mask_cntl: u8) -> bool {
+        // US915 uses ch_mask_cntl 0-4 for 125 kHz channels
+        // and ch_mask_cntl 5 for 500 kHz channels
+        match ch_mask_cntl {
+            0..=4 => true, // All masks valid for 125 kHz channels
+            5 => ch_mask & !0xFF == 0, // Only first 8 bits valid for 500 kHz channels
+            _ => false,
+        }
+    }
+
+    fn apply_channel_mask(&mut self, ch_mask: u16, ch_mask_cntl: u8) {
+        let base_idx = (ch_mask_cntl as usize) * 16;
+        if ch_mask_cntl <= 4 {
+            // Apply mask to 125 kHz channels
+            for i in 0..16 {
+                if let Some(channel) = self.channels.get_mut(base_idx + i) {
+                    channel.enabled = (ch_mask & (1 << i)) != 0;
+                }
+            }
+        } else if ch_mask_cntl == 5 {
+            // Apply mask to 500 kHz channels
+            for i in 0..8 {
+                if let Some(channel) = self.channels.get_mut(64 + i) {
+                    channel.enabled = (ch_mask & (1 << i)) != 0;
+                }
+            }
+        }
     }
 }
