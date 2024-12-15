@@ -105,11 +105,19 @@ mod tests {
     fn test_drift_compensation() {
         let mut time_sync = NetworkTime::new();
         
+        // Set initial time offset
+        time_sync.set_time_offset(0);
+        
         // Simulate beacon reception with drift
         time_sync.update(0);
-        time_sync.update(128_100); // 100ms drift
+        time_sync.update(128_100); // 100ms drift after one beacon period
         
-        // Verify drift compensation
-        assert!(time_sync.drift_compensation != 0);
+        // Verify drift compensation is non-zero and reasonable
+        assert!(time_sync.drift_compensation > 0);
+        assert!(time_sync.drift_compensation < 1000); // Less than 1000ppm
+        
+        // Verify time calculation includes drift
+        let current = time_sync.current_time();
+        assert!(current > 0);
     }
 } 

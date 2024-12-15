@@ -18,6 +18,7 @@ pub struct MockRadio {
     last_tx: Option<Vec<u8, 256>>,
     rx_data: Option<Vec<u8, 256>>,
     error_mode: bool,
+    time_counter: u32,
 }
 
 impl MockRadio {
@@ -29,6 +30,7 @@ impl MockRadio {
             last_tx: None,
             rx_data: None,
             error_mode: false,
+            time_counter: 0,
         }
     }
 
@@ -47,6 +49,11 @@ impl MockRadio {
     /// Set error mode
     pub fn set_error_mode(&mut self, enabled: bool) {
         self.error_mode = enabled;
+    }
+
+    /// Set current time
+    pub fn set_time(&mut self, time: u32) {
+        self.time_counter = time;
     }
 }
 
@@ -178,6 +185,6 @@ impl Radio for MockRadio {
     }
 
     fn get_time(&self) -> u32 {
-        0 // Mock implementation returns 0
+        self.time_counter
     }
 }
