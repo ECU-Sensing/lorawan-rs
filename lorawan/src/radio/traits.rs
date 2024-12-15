@@ -87,4 +87,10 @@ pub trait Radio {
 
     /// Put radio in sleep mode
     fn sleep(&mut self) -> Result<(), Self::Error>;
+
+    /// Reset the radio
+    fn reset(&mut self) -> Result<(), Self::Error>;
+
+    /// Get current time in milliseconds
+    fn get_time(&self) -> u32;
 }

@@ -6,16 +6,18 @@
 //! - Network time synchronization
 //! - Beacon loss detection and recovery
 
-mod beacon;
-mod ping_slot;
-mod timing;
+pub mod beacon;
+pub mod ping_slot;
+pub mod timing;
 
 use crate::{
     radio::traits::Radio,
     lorawan::{
-        region::Region,
-        mac::{MacLayer, Error},
+        region::{Region, DataRate},
+        mac::{MacLayer, MacError},
     },
+    class::{DeviceClass, OperatingMode},
+    config::device::{AESKey, SessionState},
 };
 
 use self::{
@@ -24,7 +26,6 @@ use self::{
     timing::NetworkTime,
 };
 
-use heapless::Vec;
 
 /// Maximum number of ping slots per beacon period
 const MAX_PING_SLOTS: usize = 16;
@@ -56,14 +57,14 @@ impl<R: Radio + Clone, REG: Region> ClassB<R, REG> {
     }
 
     /// Start Class B operation
-    pub fn start(&mut self) -> Result<(), Error<R::Error>> {
+    pub fn start(&mut self) -> Result<(), MacError<R::Error>> {
         // Start beacon acquisition
-        self.beacon_tracker.start_acquisition()?;
+        self.beacon_tracker.start_acquisition(&mut self.mac)?;
         Ok(())
     }
 
     /// Process Class B operations
-    pub fn process(&mut self) -> Result<(), Error<R::Error>> {
+    pub fn process(&mut self) -> Result<(), MacError<R::Error>> {
         // Process beacon tracking
         self.beacon_tracker.process(&mut self.mac)?;
 
@@ -81,7 +82,7 @@ impl<R: Radio + Clone, REG: Region> ClassB<R, REG> {
     }
 
     /// Configure ping slot parameters
-    pub fn configure_ping_slots(&mut self, periodicity: u8) -> Result<(), Error<R::Error>> {
+    pub fn configure_ping_slots(&mut self, periodicity: u8) -> Result<(), MacError<R::Error>> {
         self.ping_slot_config.set_periodicity(periodicity);
         self.ping_scheduler.update_schedule(
             &self.ping_slot_config,
@@ -91,7 +92,7 @@ impl<R: Radio + Clone, REG: Region> ClassB<R, REG> {
     }
 
     /// Process ping slots
-    fn process_ping_slots(&mut self) -> Result<(), Error<R::Error>> {
+    fn process_ping_slots(&mut self) -> Result<(), MacError<R::Error>> {
         let current_time = self.network_time.current_time();
         
         // Check if we need to open a ping slot
@@ -103,16 +104,60 @@ impl<R: Radio + Clone, REG: Region> ClassB<R, REG> {
     }
 
     /// Open a ping receive slot
-    fn open_ping_slot(&mut self, slot: u32) -> Result<(), Error<R::Error>> {
+    fn open_ping_slot(&mut self, slot: u32) -> Result<(), MacError<R::Error>> {
         // Configure radio for ping slot reception
         self.mac.set_rx_config(
-            self.ping_slot_config.data_rate(),
             self.ping_slot_config.frequency(),
+            DataRate::from_index(self.ping_slot_config.data_rate()),
+            30, // 30ms ping slot timeout
         )?;
 
         // Start reception for ping slot duration
-        self.mac.rx_for_duration(30)?; // 30ms ping slot
+        let mut buffer = [0u8; 256];
+        self.mac.receive(&mut buffer)?;
 
         Ok(())
+    }
+}
+
+impl<R: Radio + Clone, REG: Region> DeviceClass<R, REG> for ClassB<R, REG> {
+    type Error = MacError<R::Error>;
+
+    fn operating_mode(&self) -> OperatingMode {
+        OperatingMode::ClassB
+    }
+
+    fn process(&mut self) -> Result<(), Self::Error> {
+        // Call the process implementation from ClassB
+        ClassB::process(self)
+    }
+
+    fn send_data(&mut self, port: u8, data: &[u8], confirmed: bool) -> Result<(), Self::Error> {
+        if confirmed {
+            self.mac.send_confirmed(port, data)
+        } else {
+            self.mac.send_unconfirmed(port, data)
+        }
+    }
+
+    fn send_join_request(
+        &mut self,
+        dev_eui: [u8; 8],
+        app_eui: [u8; 8],
+        app_key: AESKey,
+    ) -> Result<(), Self::Error> {
+        self.mac.join_request(dev_eui, app_eui, app_key)
+    }
+
+    fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
+        self.mac.receive(buffer)
+    }
+
+    fn get_session_state(&self) -> SessionState {
+        self.mac.get_session_state().clone()
+    }
+
+    fn get_mac_layer(&self) -> &MacLayer<R, REG> {
+        &self.mac
     }
 } 

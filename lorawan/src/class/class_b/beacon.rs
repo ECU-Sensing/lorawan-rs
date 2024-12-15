@@ -9,7 +9,7 @@ use crate::{
     radio::traits::Radio,
     lorawan::{
         region::Region,
-        mac::{MacLayer, Error},
+        mac::{MacLayer, MacError},
     },
 };
 
@@ -63,11 +63,15 @@ impl BeaconTracker {
     pub fn start_acquisition<R: Radio + Clone, REG: Region>(
         &mut self,
         mac: &mut MacLayer<R, REG>,
-    ) -> Result<(), Error<R::Error>> {
+    ) -> Result<(), MacError<R::Error>> {
         // Configure radio for beacon reception
+        let beacon_channel = mac.get_region_mut().get_next_beacon_channel()
+            .ok_or(MacError::InvalidChannel)?;
+            
         mac.set_rx_config(
-            REG::BEACON_DR,
-            REG::BEACON_FREQ,
+            beacon_channel.frequency,
+            beacon_channel.min_dr,
+            BEACON_WINDOW as u32,
         )?;
 
         self.state = BeaconState::Searching;
@@ -78,7 +82,7 @@ impl BeaconTracker {
     pub fn process<R: Radio + Clone, REG: Region>(
         &mut self,
         mac: &mut MacLayer<R, REG>,
-    ) -> Result<(), Error<R::Error>> {
+    ) -> Result<(), MacError<R::Error>> {
         match self.state {
             BeaconState::Searching => {
                 self.process_beacon_search(mac)?;
@@ -98,7 +102,7 @@ impl BeaconTracker {
     fn process_beacon_search<R: Radio + Clone, REG: Region>(
         &mut self,
         mac: &mut MacLayer<R, REG>,
-    ) -> Result<(), Error<R::Error>> {
+    ) -> Result<(), MacError<R::Error>> {
         // Try to receive beacon
         if let Some(beacon) = self.receive_beacon(mac)? {
             // Validate beacon
@@ -115,7 +119,7 @@ impl BeaconTracker {
     fn process_beacon_tracking<R: Radio + Clone, REG: Region>(
         &mut self,
         mac: &mut MacLayer<R, REG>,
-    ) -> Result<(), Error<R::Error>> {
+    ) -> Result<(), MacError<R::Error>> {
         let current_time = mac.get_time();
         
         // Check if we're in beacon window
@@ -138,10 +142,20 @@ impl BeaconTracker {
     fn process_beacon_recovery<R: Radio + Clone, REG: Region>(
         &mut self,
         mac: &mut MacLayer<R, REG>,
-    ) -> Result<(), Error<R::Error>> {
+    ) -> Result<(), MacError<R::Error>> {
         // Widen search window
         let search_window = BEACON_WINDOW + 2 * BEACON_GUARD;
         
+        // Configure radio with wider window
+        let beacon_channel = mac.get_region_mut().get_next_beacon_channel()
+            .ok_or(MacError::InvalidChannel)?;
+            
+        mac.set_rx_config(
+            beacon_channel.frequency,
+            beacon_channel.min_dr,
+            search_window,
+        )?;
+
         // Try to reacquire beacon
         if let Some(beacon) = self.receive_beacon(mac)? {
             if self.validate_beacon(&beacon) {
@@ -174,10 +188,8 @@ impl BeaconTracker {
 
     /// Validate received beacon
     fn validate_beacon(&self, beacon: &BeaconData) -> bool {
-        // Check beacon CRC and MIC
-        // Verify beacon parameters
-        // Validate timing
-        true // Simplified for example
+        // Basic validation: check if beacon info is not all zeros
+        !beacon.info.iter().all(|&b| b == 0)
     }
 
     /// Get current beacon state
@@ -193,6 +205,24 @@ impl BeaconTracker {
     /// Get last beacon time
     pub fn last_beacon_time(&self) -> u32 {
         self.last_beacon_time
+    }
+
+    /// Receive beacon
+    fn receive_beacon<R: Radio + Clone, REG: Region>(
+        &mut self,
+        mac: &mut MacLayer<R, REG>,
+    ) -> Result<Option<BeaconData>, MacError<R::Error>> {
+        let mut buffer = [0u8; 17]; // Beacon size is 17 bytes
+        match mac.receive(&mut buffer) {
+            Ok(size) if size == 17 => {
+                Ok(Some(BeaconData {
+                    time: mac.get_time(),
+                    info: buffer,
+                }))
+            }
+            Ok(_) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 }
 

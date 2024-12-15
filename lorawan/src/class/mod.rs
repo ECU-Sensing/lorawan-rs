@@ -10,6 +10,7 @@ pub mod class_a;
 
 /// Class B device implementation
 pub mod class_b;
+pub use class_b::ClassB;
 
 /// Class C device implementation
 pub mod class_c;

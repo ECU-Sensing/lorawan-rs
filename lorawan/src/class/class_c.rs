@@ -4,7 +4,7 @@
 //! when not transmitting. This allows for minimal downlink latency at the cost
 //! of increased power consumption.
 
-use super::{DeviceClass, OperatingMode, RxConfig};
+use super::{DeviceClass, OperatingMode};
 use crate::config::device::{AESKey, SessionState};
 use crate::lorawan::mac::{MacError, MacLayer};
 use crate::lorawan::region::{DataRate, Region};
@@ -143,8 +143,8 @@ where
 
     /// Update signal quality metrics
     fn update_signal_metrics(&mut self) -> Result<(), MacError<R::Error>> {
-        self.power_state.last_rssi = self.mac.get_rssi()?;
-        self.power_state.last_snr = self.mac.get_snr()?;
+        self.power_state.last_rssi = self.mac.get_radio_mut().get_rssi()?;
+        self.power_state.last_snr = self.mac.get_radio_mut().get_snr()?;
         Ok(())
     }
 
@@ -158,7 +158,7 @@ where
             Err(error)
         } else {
             // Try to recover by resetting radio and resuming RX2
-            self.mac.reset()?;
+            self.mac.get_radio_mut().reset()?;
             self.resume_rx2()
         }
     }

@@ -160,9 +160,19 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
         &self.phy.radio
     }
 
+    /// Get mutable radio reference
+    pub fn get_radio_mut(&mut self) -> &mut R {
+        &mut self.phy.radio
+    }
+
     /// Get region reference
     pub fn get_region(&self) -> &REG {
         &self.region
+    }
+
+    /// Get mutable region reference
+    pub fn get_region_mut(&mut self) -> &mut REG {
+        &mut self.region
     }
 
     /// Get session state reference
@@ -783,5 +793,10 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
                 })
             },
         }
+    }
+
+    /// Get current time in milliseconds
+    pub fn get_time(&self) -> u32 {
+        self.phy.get_time()
     }
 }

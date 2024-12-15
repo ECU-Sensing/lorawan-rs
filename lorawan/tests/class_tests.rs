@@ -48,7 +48,7 @@ fn test_class_b_beacon_sync() {
     let mut device = ClassB::new(mac);
 
     // Start beacon acquisition
-    device.start_beacon_acquisition();
+    assert!(device.start().is_ok());
     assert!(device.process().is_ok());
 }
 

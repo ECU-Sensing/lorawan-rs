@@ -123,4 +123,9 @@ impl<R: Radio> PhyLayer<R> {
     pub fn is_transmitting(&mut self) -> Result<bool, R::Error> {
         self.radio.is_transmitting()
     }
+
+    /// Get current time in milliseconds
+    pub fn get_time(&self) -> u32 {
+        self.radio.get_time()
+    }
 }

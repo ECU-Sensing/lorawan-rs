@@ -377,4 +377,21 @@ where
     fn sleep(&mut self) -> Result<(), Self::Error> {
         self.set_mode(MODE_SLEEP)
     }
+
+    fn reset(&mut self) -> Result<(), Self::Error> {
+        self.reset.set_low().map_err(SX127xError::Reset)?;
+        // Wait for reset
+        for _ in 0..100 {
+            if self.busy.is_low().unwrap_or(false) {
+                break;
+            }
+        }
+        self.reset.set_high().map_err(SX127xError::Reset)?;
+        Ok(())
+    }
+
+    fn get_time(&self) -> u32 {
+        // Simple counter implementation - you may want to replace this with a real time source
+        0
+    }
 }
