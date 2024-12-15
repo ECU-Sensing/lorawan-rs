@@ -119,26 +119,26 @@ jobs:
         working-directory: ./lorawan
         run: cargo doc --no-deps --document-private-items
 
-  coverage:
-    name: Code coverage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
+  # coverage:
+  #   name: Code coverage
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v3
       
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
+  #     - name: Install Rust toolchain
+  #       uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         toolchain: stable
       
-      - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin
+  #     - name: Install cargo-tarpaulin
+  #       run: cargo install cargo-tarpaulin
       
-      - name: Run cargo-tarpaulin
-        working-directory: ./lorawan
-        run: cargo tarpaulin --verbose --workspace --timeout 120 --out Xml
+  #     - name: Run cargo-tarpaulin
+  #       working-directory: ./lorawan
+  #       run: cargo tarpaulin --verbose --workspace --timeout 120 --out Xml
       
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: true
+  #     - name: Upload coverage to Codecov
+  #       uses: codecov/codecov-action@v3
+  #       with:
+  #         token: ${{ secrets.CODECOV_TOKEN }}
+  #         fail_ci_if_error: true

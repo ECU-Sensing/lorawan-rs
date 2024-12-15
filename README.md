@@ -1,8 +1,8 @@
 # lorawan-rs 📡
 
 [![Crates.io](https://img.shields.io/crates/v/lorawan-rs)](https://crates.io/crates/lorawan-rs)
-[![Documentation](https://img.shields.io/badge/docs-github.io-blue)](https://user.github.io/lorawan-rs)
-[![Build Status](https://github.com/user/lorawan-rs/workflows/CI/badge.svg)](https://github.com/user/lorawan-rs/actions)
+[![Documentation](https://img.shields.io/badge/docs-github.io-blue)](https://ecu-sensing.github.io/lorawan-rs)
+[![Build Status](https://github.com/ECU-Sensing/lorawan-rs/workflows/CI/badge.svg)](https://github.com/ECU-Sensing/lorawan-rs/actions)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](README.md)
 [![no_std](https://img.shields.io/badge/no__std-yes-blue)](README.md)
 
