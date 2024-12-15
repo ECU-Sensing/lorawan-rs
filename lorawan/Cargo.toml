@@ -40,7 +40,3 @@ required-features = ["std"]
 [[example]]
 name = "downlink"
 required-features = ["std"]
-
-[[example]]
-name = "repeater"
-required-features = ["std"]
