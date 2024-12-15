@@ -101,49 +101,44 @@ jobs:
     name: Documentation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
           toolchain: stable
-          override: true
+          components: rust-docs
+      
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            lorawan -> target
       
       - name: Generate documentation
-        uses: actions-rs/cargo@v1
-        with:
-          command: doc
-          args: --no-deps --document-private-items
+        working-directory: ./lorawan
+        run: cargo doc --no-deps --document-private-items
 
   coverage:
     name: Code coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
           toolchain: stable
-          override: true
       
       - name: Install cargo-tarpaulin
-        uses: actions-rs/install@v0.1
-        with:
-          crate: cargo-tarpaulin
-          version: latest
-          use-tool-cache: true
+        run: cargo install cargo-tarpaulin
       
       - name: Run cargo-tarpaulin
-        uses: actions-rs/cargo@v1
-        with:
-          command: tarpaulin
-          args: --verbose --workspace --timeout 120 --out Xml
+        working-directory: ./lorawan
+        run: cargo tarpaulin --verbose --workspace --timeout 120 --out Xml
       
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v1
+        uses: codecov/codecov-action@v3
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: true 
+          fail_ci_if_error: true
