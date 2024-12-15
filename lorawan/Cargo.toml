@@ -28,3 +28,19 @@ std = []
 defmt = ["dep:defmt"]
 stm32f4 = ["stm32f4xx-hal"]
 sx126x = []
+
+[[example]]
+name = "hello_world"
+required-features = ["std"]
+
+[[example]]
+name = "otaa"
+required-features = ["std"]
+
+[[example]]
+name = "downlink"
+required-features = ["std"]
+
+[[example]]
+name = "repeater"
+required-features = ["std"]
