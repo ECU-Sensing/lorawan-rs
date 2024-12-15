@@ -21,9 +21,9 @@
 #![no_main]
 
 use lorawan::{
+    class::OperatingMode,
     config::device::{AESKey, DeviceConfig},
     device::LoRaWANDevice,
-    class::OperatingMode,
     lorawan::region::US915,
     radio::sx127x::SX127x,
 };
@@ -35,8 +35,7 @@ use panic_halt as _;
 const DEVEUI: [u8; 8] = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]; // LSB
 const APPEUI: [u8; 8] = [0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]; // LSB
 const APPKEY: [u8; 16] = [
-    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-    0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
 ]; // MSB
 
 #[entry]
@@ -45,7 +44,7 @@ fn main() -> ! {
     let peripherals = hal::Peripherals::take().unwrap();
     let pins = hal::Pins::new(peripherals.PORT);
     let mut status_led = pins.d13.into_push_pull_output();
-    
+
     // Initialize SPI for radio
     let spi = hal::spi_master(
         &mut peripherals.PM,
@@ -77,23 +76,14 @@ fn main() -> ! {
     };
 
     // Create device configuration
-    let config = DeviceConfig::new_otaa(
-        DEVEUI,
-        APPEUI,
-        AESKey::new(APPKEY),
-    );
+    let config = DeviceConfig::new_otaa(DEVEUI, APPEUI, AESKey::new(APPKEY));
 
     // Initialize US915 region with proper sub-band
     let mut region = US915::new();
     region.set_sub_band(2); // TTN US915 uses sub-band 2
 
     // Initialize LoRaWAN device
-    let mut device = match LoRaWANDevice::new(
-        radio,
-        config,
-        region,
-        OperatingMode::ClassA,
-    ) {
+    let mut device = match LoRaWANDevice::new(radio, config, region, OperatingMode::ClassA) {
         Ok(d) => d,
         Err(_) => {
             // Double blink on device init error
@@ -133,7 +123,8 @@ fn main() -> ! {
 
         // Send data with frequency hopping (handled by region)
         status_led.set_high().ok();
-        if let Err(_) = device.send_data(1, &data, true) { // Use confirmed messages
+        if let Err(_) = device.send_data(1, &data, true) {
+            // Use confirmed messages
             loop {
                 status_led.toggle().ok();
                 delay.delay_ms(500u32);
@@ -161,4 +152,4 @@ fn main() -> ! {
         counter = counter.wrapping_add(1);
         delay.delay_ms(60_000u32); // Send every minute
     }
-} 
+}

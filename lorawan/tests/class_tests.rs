@@ -1,17 +1,9 @@
 #![no_std]
 
 use lorawan::{
-    class::{
-        class_b::ClassB,
-        class_c::ClassC,
-        DeviceClass,
-        OperatingMode,
-    },
+    class::{class_b::ClassB, class_c::ClassC, DeviceClass, OperatingMode},
     config::device::{AESKey, DeviceConfig, SessionState},
-    lorawan::{
-        mac::MacLayer,
-        region::US915,
-    },
+    lorawan::{mac::MacLayer, region::US915},
 };
 
 use heapless::Vec;
@@ -98,7 +90,7 @@ fn test_window_switching() {
     // Test RX window switching during transmission
     let data = [1, 2, 3, 4];
     assert!(device.send_data(1, &data, false).is_ok());
-    
+
     let mut buffer = [0u8; 256];
     assert!(device.receive(&mut buffer).is_ok());
-} 
+}

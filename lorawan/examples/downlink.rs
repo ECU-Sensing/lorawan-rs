@@ -25,26 +25,22 @@
 #![no_main]
 
 use lorawan::{
+    class::OperatingMode,
     config::device::{AESKey, DeviceConfig},
     device::LoRaWANDevice,
-    class::OperatingMode,
-    lorawan::{
-        region::US915,
-        commands::MacCommand,
-    },
+    lorawan::{commands::MacCommand, region::US915},
     radio::sx127x::SX127x,
 };
 
-use heapless::Vec;
 use cortex_m_rt::entry;
+use heapless::Vec;
 use panic_halt as _;
 
 // Example DevEUI, AppEUI and AppKey - replace with your own from TTN console
 const DEVEUI: [u8; 8] = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]; // LSB
 const APPEUI: [u8; 8] = [0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]; // LSB
 const APPKEY: [u8; 16] = [
-    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-    0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
 ]; // MSB
 
 #[entry]
@@ -53,7 +49,7 @@ fn main() -> ! {
     let peripherals = hal::Peripherals::take().unwrap();
     let pins = hal::Pins::new(peripherals.PORT);
     let mut status_led = pins.d13.into_push_pull_output();
-    
+
     // Initialize SPI for radio
     let spi = hal::spi_master(
         &mut peripherals.PM,
@@ -75,40 +71,27 @@ fn main() -> ! {
     let dio2 = pins.d9.into_floating_input();
     let radio = match SX127x::new(spi, cs, reset, dio0, dio1, dio2) {
         Ok(r) => r,
-        Err(_) => {
-            loop {
-                status_led.toggle().ok();
-                hal::delay::Delay::new().delay_ms(100u32);
-            }
-        }
+        Err(_) => loop {
+            status_led.toggle().ok();
+            hal::delay::Delay::new().delay_ms(100u32);
+        },
     };
 
     // Create device configuration
-    let config = DeviceConfig::new_otaa(
-        DEVEUI,
-        APPEUI,
-        AESKey::new(APPKEY),
-    );
+    let config = DeviceConfig::new_otaa(DEVEUI, APPEUI, AESKey::new(APPKEY));
 
     // Initialize LoRaWAN device
-    let mut device = match LoRaWANDevice::new(
-        radio,
-        config,
-        US915::new(),
-        OperatingMode::ClassA,
-    ) {
+    let mut device = match LoRaWANDevice::new(radio, config, US915::new(), OperatingMode::ClassA) {
         Ok(d) => d,
-        Err(_) => {
-            loop {
-                for _ in 0..2 {
-                    status_led.set_high().ok();
-                    hal::delay::Delay::new().delay_ms(100u32);
-                    status_led.set_low().ok();
-                    hal::delay::Delay::new().delay_ms(100u32);
-                }
-                hal::delay::Delay::new().delay_ms(500u32);
+        Err(_) => loop {
+            for _ in 0..2 {
+                status_led.set_high().ok();
+                hal::delay::Delay::new().delay_ms(100u32);
+                status_led.set_low().ok();
+                hal::delay::Delay::new().delay_ms(100u32);
             }
-        }
+            hal::delay::Delay::new().delay_ms(500u32);
+        },
     };
 
     // Join network
@@ -133,7 +116,7 @@ fn main() -> ! {
         // Send status update
         let mut payload: Vec<u8, 32> = Vec::new();
         payload.extend_from_slice(b"Status OK").unwrap();
-        
+
         status_led.set_high().ok();
         if let Err(_) = device.send_data(1, &payload, true) {
             loop {
@@ -154,18 +137,34 @@ fn main() -> ! {
                                 MacCommand::DevStatusReq => {
                                     // Respond with device status
                                     let battery = 255; // Full battery
-                                    let margin = 20;   // Good link margin
+                                    let margin = 20; // Good link margin
                                     device.send_device_status(battery, margin).ok();
                                 }
                                 MacCommand::DutyCycleReq(max_duty_cycle) => {
                                     // Update duty cycle settings
                                     device.set_duty_cycle(max_duty_cycle).ok();
                                 }
-                                MacCommand::RXParamSetupReq { rx1_dr_offset, rx2_data_rate, freq } => {
+                                MacCommand::RXParamSetupReq {
+                                    rx1_dr_offset,
+                                    rx2_data_rate,
+                                    freq,
+                                } => {
                                     // Update RX parameters
-                                    device.set_rx_params(rx1_dr_offset, rx2_data_rate, rx2_data_rate, freq).ok();
+                                    device
+                                        .set_rx_params(
+                                            rx1_dr_offset,
+                                            rx2_data_rate,
+                                            rx2_data_rate,
+                                            freq,
+                                        )
+                                        .ok();
                                 }
-                                MacCommand::NewChannelReq { ch_index, freq, min_dr, max_dr } => {
+                                MacCommand::NewChannelReq {
+                                    ch_index,
+                                    freq,
+                                    min_dr,
+                                    max_dr,
+                                } => {
                                     // Configure new channel
                                     device.set_channel(ch_index, freq, min_dr, max_dr).ok();
                                 }
@@ -200,4 +199,4 @@ fn main() -> ! {
         // Wait before next transmission
         delay.delay_ms(60_000u32);
     }
-} 
+}

@@ -20,9 +20,9 @@
 #![no_main]
 
 use lorawan::{
+    class::OperatingMode,
     config::device::{AESKey, DeviceConfig},
     device::LoRaWANDevice,
-    class::OperatingMode,
     lorawan::region::US915,
     radio::sx127x::SX127x,
 };
@@ -34,8 +34,7 @@ use panic_halt as _;
 const DEVEUI: [u8; 8] = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]; // LSB
 const APPEUI: [u8; 8] = [0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]; // LSB
 const APPKEY: [u8; 16] = [
-    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-    0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
 ]; // MSB
 
 #[entry]
@@ -44,7 +43,7 @@ fn main() -> ! {
     let peripherals = hal::Peripherals::take().unwrap();
     let pins = hal::Pins::new(peripherals.PORT);
     let mut red_led = pins.d13.into_push_pull_output();
-    
+
     // Initialize SPI for radio
     let spi = hal::spi_master(
         &mut peripherals.PM,
@@ -76,19 +75,10 @@ fn main() -> ! {
     };
 
     // Create device configuration
-    let config = DeviceConfig::new_otaa(
-        DEVEUI,
-        APPEUI,
-        AESKey::new(APPKEY),
-    );
+    let config = DeviceConfig::new_otaa(DEVEUI, APPEUI, AESKey::new(APPKEY));
 
     // Initialize LoRaWAN device
-    let mut device = match LoRaWANDevice::new(
-        radio,
-        config,
-        US915::new(),
-        OperatingMode::ClassA,
-    ) {
+    let mut device = match LoRaWANDevice::new(radio, config, US915::new(), OperatingMode::ClassA) {
         Ok(d) => d,
         Err(_) => {
             // Double blink on device init error
@@ -128,7 +118,7 @@ fn main() -> ! {
         message[..msg.len()].copy_from_slice(msg);
         let count_str = counter.to_string();
         message[msg.len()..msg.len() + count_str.len()].copy_from_slice(count_str.as_bytes());
-        
+
         // Send unconfirmed uplink on port 1
         red_led.set_high().ok();
         if let Err(_) = device.send_data(1, &message[..msg.len() + count_str.len()], false) {

@@ -73,7 +73,8 @@ fn test_crypto_join() {
     let net_id = [0x04, 0x05, 0x06];
     let dev_nonce = 0x0708;
 
-    let (nwk_skey, app_skey) = crypto::derive_session_keys(&app_key, &app_nonce, &net_id, dev_nonce);
+    let (nwk_skey, app_skey) =
+        crypto::derive_session_keys(&app_key, &app_nonce, &net_id, dev_nonce);
 
     assert_eq!(nwk_skey.as_bytes().len(), 16);
     assert_eq!(app_skey.as_bytes().len(), 16);
