@@ -1,79 +1,54 @@
-use embedded_hal::{
-    blocking::spi::{Transfer, Write},
-    digital::v2::{InputPin, OutputPin},
-};
+use embedded_hal::blocking::spi::{Transfer, Write};
+use embedded_hal::digital::v2::{InputPin, OutputPin};
 
-use crate::radio::traits::{ModulationParams, Radio, RxConfig, TxConfig};
+use super::traits::{Radio, RxConfig, TxConfig};
 
-// SX127x Register Map
+// Register addresses
 const REG_FIFO: u8 = 0x00;
 const REG_OP_MODE: u8 = 0x01;
 const REG_FRF_MSB: u8 = 0x06;
 const REG_FRF_MID: u8 = 0x07;
 const REG_FRF_LSB: u8 = 0x08;
 const REG_PA_CONFIG: u8 = 0x09;
-const REG_PA_RAMP: u8 = 0x0A;
-const REG_OCP: u8 = 0x0B;
-const REG_LNA: u8 = 0x0C;
-const REG_FIFO_ADDR_PTR: u8 = 0x0D;
-const REG_FIFO_TX_BASE_ADDR: u8 = 0x0E;
-const REG_FIFO_RX_BASE_ADDR: u8 = 0x0F;
-const REG_FIFO_RX_CURRENT_ADDR: u8 = 0x10;
-const REG_IRQ_FLAGS: u8 = 0x12;
-const REG_RX_NB_BYTES: u8 = 0x13;
-const REG_PKT_SNR_VALUE: u8 = 0x19;
-const REG_PKT_RSSI_VALUE: u8 = 0x1A;
 const REG_MODEM_CONFIG_1: u8 = 0x1D;
 const REG_MODEM_CONFIG_2: u8 = 0x1E;
-const REG_PREAMBLE_MSB: u8 = 0x20;
-const REG_PREAMBLE_LSB: u8 = 0x21;
-const REG_PAYLOAD_LENGTH: u8 = 0x22;
-const REG_MODEM_CONFIG_3: u8 = 0x26;
-const REG_FREQ_ERROR_MSB: u8 = 0x28;
-const REG_FREQ_ERROR_MID: u8 = 0x29;
-const REG_FREQ_ERROR_LSB: u8 = 0x2A;
-const REG_RSSI_WIDEBAND: u8 = 0x2C;
-const REG_DETECTION_OPTIMIZE: u8 = 0x31;
-const REG_INVERTIQ: u8 = 0x33;
-const REG_DETECTION_THRESHOLD: u8 = 0x37;
-const REG_SYNC_WORD: u8 = 0x39;
-const REG_INVERTIQ2: u8 = 0x3B;
-const REG_DIO_MAPPING_1: u8 = 0x40;
-const REG_VERSION: u8 = 0x42;
-const REG_PA_DAC: u8 = 0x4D;
+const REG_IRQ_FLAGS: u8 = 0x12;
 
-// Operating Mode bits
-const MODE_LONG_RANGE_MODE: u8 = 0x80;
+// Operating modes
 const MODE_SLEEP: u8 = 0x00;
 const MODE_STDBY: u8 = 0x01;
 const MODE_TX: u8 = 0x03;
-const MODE_RX_CONTINUOUS: u8 = 0x05;
-const MODE_RX_SINGLE: u8 = 0x06;
+const MODE_RX: u8 = 0x05;
 
-// PA Config
-const PA_BOOST: u8 = 0x80;
-
-// IRQ Flags
+// IRQ flags
 const IRQ_TX_DONE_MASK: u8 = 0x08;
-const IRQ_PAYLOAD_CRC_ERROR_MASK: u8 = 0x20;
 const IRQ_RX_DONE_MASK: u8 = 0x40;
+const IRQ_RX_TIMEOUT_MASK: u8 = 0x80;
 
-/// Possible errors in radio operations
+/// SPI error trait
+pub trait SpiError: core::fmt::Debug {}
+
+// Implement SpiError for embedded-hal SPI error types
+impl<E: core::fmt::Debug> SpiError for E {}
+
+/// Radio errors
 #[derive(Debug)]
-pub enum RadioError {
-    /// SPI transfer error
-    Spi,
-    /// GPIO error
-    Gpio,
+pub enum SX127xError<E, CSE, RESETE> {
+    /// SPI error
+    Spi(E),
+    /// CS pin error
+    Cs(CSE),
+    /// Reset pin error
+    Reset(RESETE),
+    /// Invalid frequency
+    InvalidFrequency,
+    /// Invalid power
+    InvalidPower,
     /// Invalid configuration
-    Config,
-    /// Radio hardware error
-    Hardware,
-    /// Operation timeout
-    Timeout,
+    InvalidConfig,
 }
 
-/// SX127x Radio Driver
+/// SX127x driver
 pub struct SX127x<SPI, CS, RESET, BUSY, DIO0, DIO1>
 where
     SPI: Transfer<u8> + Write<u8>,
@@ -92,16 +67,19 @@ where
     frequency: u32,
 }
 
-impl<SPI, CS, RESET, BUSY, DIO0, DIO1> SX127x<SPI, CS, RESET, BUSY, DIO0, DIO1>
+impl<SPI, CS, RESET, BUSY, DIO0, DIO1, E, CSE, RESETE> SX127x<SPI, CS, RESET, BUSY, DIO0, DIO1>
 where
-    SPI: Transfer<u8> + Write<u8>,
-    CS: OutputPin,
-    RESET: OutputPin,
+    SPI: Transfer<u8, Error = E> + Write<u8, Error = E>,
+    CS: OutputPin<Error = CSE>,
+    RESET: OutputPin<Error = RESETE>,
     BUSY: InputPin,
     DIO0: InputPin,
     DIO1: InputPin,
+    E: core::fmt::Debug,
+    CSE: core::fmt::Debug,
+    RESETE: core::fmt::Debug,
 {
-    /// Create new instance of SX127x driver
+    /// Create new instance
     pub fn new(
         spi: SPI,
         cs: CS,
@@ -109,8 +87,8 @@ where
         busy: BUSY,
         dio0: DIO0,
         dio1: DIO1,
-    ) -> Result<Self, RadioError> {
-        let mut radio = Self {
+    ) -> Result<Self, SX127xError<E, CSE, RESETE>> {
+        let mut sx127x = Self {
             spi,
             cs,
             reset,
@@ -120,111 +98,120 @@ where
             frequency: 0,
         };
 
-        // Perform hardware reset
-        radio.reset.set_high().map_err(|_| RadioError::Gpio)?;
-        // Wait for reset
-        // TODO: Use a proper delay
-        for _ in 0..1000 {
-            core::hint::spin_loop();
-        }
-        radio.reset.set_low().map_err(|_| RadioError::Gpio)?;
-        // Wait for chip to start
-        for _ in 0..1000 {
-            core::hint::spin_loop();
-        }
+        // Initialize the radio
+        sx127x.init()?;
 
-        // Check version
-        let version = radio.read_register(REG_VERSION)?;
-        if version != 0x12 {
-            return Err(RadioError::Hardware);
-        }
-
-        Ok(radio)
+        Ok(sx127x)
     }
 
-    /// Read a radio register
-    fn read_register(&mut self, addr: u8) -> Result<u8, RadioError> {
-        self.cs.set_low().map_err(|_| RadioError::Gpio)?;
-        let mut buffer = [addr & 0x7F, 0];
-        self.spi.transfer(&mut buffer).map_err(|_| RadioError::Spi)?;
-        self.cs.set_high().map_err(|_| RadioError::Gpio)?;
-        Ok(buffer[1])
+    /// Read register
+    fn read_register(&mut self, addr: u8, buffer: &mut [u8], len: usize) -> Result<(), SX127xError<E, CSE, RESETE>> {
+        // Set CS low to start transaction
+        self.cs.set_low().map_err(SX127xError::Cs)?;
+
+        // Send address and read command
+        let mut read_cmd = [addr | 0x80];
+        self.spi.transfer(&mut read_cmd).map_err(SX127xError::Spi)?;
+
+        // Read data
+        let mut rx_byte = [0u8];
+        for i in 0..len {
+            self.spi.transfer(&mut rx_byte).map_err(SX127xError::Spi)?;
+            buffer[i] = rx_byte[0];
+        }
+
+        // Set CS high to end transaction
+        self.cs.set_high().map_err(SX127xError::Cs)?;
+
+        Ok(())
     }
 
-    /// Write to a radio register
-    fn write_register(&mut self, addr: u8, value: u8) -> Result<(), RadioError> {
-        self.cs.set_low().map_err(|_| RadioError::Gpio)?;
+    /// Write register
+    fn write_register(&mut self, addr: u8, value: u8) -> Result<(), SX127xError<E, CSE, RESETE>> {
+        self.cs.set_low().map_err(|e| SX127xError::Cs(e))?;
         let buffer = [addr | 0x80, value];
-        self.spi.write(&buffer).map_err(|_| RadioError::Spi)?;
-        self.cs.set_high().map_err(|_| RadioError::Gpio)?;
+        self.spi.write(&buffer).map_err(|e| SX127xError::Spi(e))?;
+        self.cs.set_high().map_err(|e| SX127xError::Cs(e))?;
         Ok(())
     }
 
     /// Set operating mode
-    fn set_mode(&mut self, mode: u8) -> Result<(), RadioError> {
-        self.write_register(REG_OP_MODE, MODE_LONG_RANGE_MODE | mode)
+    fn set_mode(&mut self, mode: u8) -> Result<(), SX127xError<E, CSE, RESETE>> {
+        self.write_register(REG_OP_MODE, mode | 0x80)
     }
 
-    /// Wait for busy flag to clear
-    fn wait_busy(&mut self) -> Result<(), RadioError> {
-        for _ in 0..1000 {
-            if self.busy.is_low().map_err(|_| RadioError::Gpio)? {
-                return Ok(());
-            }
-            core::hint::spin_loop();
+    /// Read from FIFO
+    fn read_fifo(&mut self, buffer: &mut [u8]) -> Result<(), SX127xError<E, CSE, RESETE>> {
+        // Read FIFO data into buffer
+        self.cs.set_low().map_err(SX127xError::Cs)?;
+        
+        // First byte is the FIFO read command
+        let mut read_cmd = [0x00];
+        self.spi.transfer(&mut read_cmd).map_err(SX127xError::Spi)?;
+        
+        // Read the actual data
+        for byte in buffer.iter_mut() {
+            let mut rx_byte = [0x00];
+            self.spi.transfer(&mut rx_byte).map_err(SX127xError::Spi)?;
+            *byte = rx_byte[0];
         }
-        Err(RadioError::Timeout)
+        
+        self.cs.set_high().map_err(SX127xError::Cs)?;
+        Ok(())
+    }
+
+    /// Write to FIFO
+    fn write_fifo(&mut self, data: &[u8]) -> Result<(), SX127xError<E, CSE, RESETE>> {
+        let spi_buffer = [REG_FIFO & 0x7F];
+        self.cs.set_low().map_err(SX127xError::Cs)?;
+        self.spi.write(&spi_buffer).map_err(SX127xError::Spi)?;
+        self.spi.write(data).map_err(SX127xError::Spi)?;
+        self.cs.set_high().map_err(SX127xError::Cs)?;
+        Ok(())
     }
 }
 
-impl<SPI, CS, RESET, BUSY, DIO0, DIO1> Radio for SX127x<SPI, CS, RESET, BUSY, DIO0, DIO1>
+impl<SPI, CS, RESET, BUSY, DIO0, DIO1, E, CSE, RESETE> Radio for SX127x<SPI, CS, RESET, BUSY, DIO0, DIO1>
 where
-    SPI: Transfer<u8> + Write<u8>,
-    CS: OutputPin,
-    RESET: OutputPin,
+    SPI: Transfer<u8, Error = E> + Write<u8, Error = E>,
+    CS: OutputPin<Error = CSE>,
+    RESET: OutputPin<Error = RESETE>,
     BUSY: InputPin,
     DIO0: InputPin,
     DIO1: InputPin,
+    E: core::fmt::Debug,
+    CSE: core::fmt::Debug,
+    RESETE: core::fmt::Debug,
 {
-    type Error = RadioError;
+    type Error = SX127xError<E, CSE, RESETE>;
 
     fn init(&mut self) -> Result<(), Self::Error> {
+        // Reset radio
+        self.reset.set_low().map_err(SX127xError::Reset)?;
+        // Wait for reset
+        for _ in 0..100 {
+            if self.busy.is_low().unwrap_or(false) {
+                break;
+            }
+        }
+        self.reset.set_high().map_err(SX127xError::Reset)?;
+
         // Set sleep mode
         self.set_mode(MODE_SLEEP)?;
-
-        // Set modem config
-        self.write_register(REG_MODEM_CONFIG_1, 0x72)?; // Bw = 125 kHz, Coding Rate = 4/5, Explicit Header mode
-        self.write_register(REG_MODEM_CONFIG_2, 0x70)?; // SF = 7, CRC on
-        self.write_register(REG_MODEM_CONFIG_3, 0x00)?; // Low Data Rate Optimize off
-
-        // Set base addresses
-        self.write_register(REG_FIFO_TX_BASE_ADDR, 0x00)?;
-        self.write_register(REG_FIFO_RX_BASE_ADDR, 0x00)?;
-
-        // Set LNA boost
-        self.write_register(REG_LNA, self.read_register(REG_LNA)? | 0x03)?;
-
-        // Set auto AGC
-        self.write_register(REG_MODEM_CONFIG_3, 0x04)?;
-
-        // Set output power to 17 dBm
-        self.write_register(REG_PA_CONFIG, PA_BOOST | 0x70)?;
-        self.write_register(REG_PA_DAC, 0x87)?;
-
-        // Set Sync Word
-        self.write_register(REG_SYNC_WORD, 0x34)?;
-
-        self.set_mode(MODE_STDBY)?;
 
         Ok(())
     }
 
     fn set_frequency(&mut self, freq: u32) -> Result<(), Self::Error> {
+        if freq < 137_000_000 || freq > 1_020_000_000 {
+            return Err(SX127xError::InvalidFrequency);
+        }
+
         self.frequency = freq;
-        
+
         // Calculate register values
-        let frf = (freq as u64 * (1 << 19) / 32000000) as u32;
-        
+        let frf = (freq as u64 * (1 << 19) / 32_000_000) as u32;
+
         // Write frequency registers
         self.write_register(REG_FRF_MSB, ((frf >> 16) & 0xFF) as u8)?;
         self.write_register(REG_FRF_MID, ((frf >> 8) & 0xFF) as u8)?;
@@ -234,92 +221,35 @@ where
     }
 
     fn set_tx_power(&mut self, power: i8) -> Result<(), Self::Error> {
-        let power = power.clamp(2, 17) as u8;
-        self.write_register(REG_PA_CONFIG, PA_BOOST | (power - 2))?;
-        Ok(())
-    }
-
-    fn transmit(&mut self, buffer: &[u8]) -> Result<(), Self::Error> {
-        // Set standby mode
-        self.set_mode(MODE_STDBY)?;
-
-        // Set payload length
-        self.write_register(REG_PAYLOAD_LENGTH, buffer.len() as u8)?;
-
-        // Reset FIFO address and payload length
-        self.write_register(REG_FIFO_ADDR_PTR, 0)?;
-
-        // Write payload to FIFO
-        self.cs.set_low().map_err(|_| RadioError::Gpio)?;
-        let mut spi_buffer = [REG_FIFO | 0x80];
-        self.spi.write(&spi_buffer).map_err(|_| RadioError::Spi)?;
-        self.spi.write(buffer).map_err(|_| RadioError::Spi)?;
-        self.cs.set_high().map_err(|_| RadioError::Gpio)?;
-
-        // Start transmission
-        self.set_mode(MODE_TX)?;
-
-        // Wait for TX done
-        while !self.dio0.is_high().map_err(|_| RadioError::Gpio)? {
-            core::hint::spin_loop();
+        if power < 2 || power > 20 {
+            return Err(SX127xError::InvalidPower);
         }
-
-        // Clear IRQ flags
-        self.write_register(REG_IRQ_FLAGS, 0xFF)?;
-
-        Ok(())
-    }
-
-    fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
-        // Set standby mode
-        self.set_mode(MODE_STDBY)?;
-
-        // Set FIFO address to current RX address
-        let rx_addr = self.read_register(REG_FIFO_RX_CURRENT_ADDR)?;
-        self.write_register(REG_FIFO_ADDR_PTR, rx_addr)?;
-
-        // Get packet length
-        let len = self.read_register(REG_RX_NB_BYTES)? as usize;
-        if len > buffer.len() {
-            return Err(RadioError::Config);
-        }
-
-        // Read payload
-        self.cs.set_low().map_err(|_| RadioError::Gpio)?;
-        let mut spi_buffer = [REG_FIFO & 0x7F];
-        self.spi.write(&spi_buffer).map_err(|_| RadioError::Spi)?;
-        self.spi.transfer(&mut buffer[..len]).map_err(|_| RadioError::Spi)?;
-        self.cs.set_high().map_err(|_| RadioError::Gpio)?;
-
-        // Clear IRQ flags
-        self.write_register(REG_IRQ_FLAGS, 0xFF)?;
-
-        Ok(len)
+        self.write_register(REG_PA_CONFIG, 0x80 | (power - 2) as u8)
     }
 
     fn configure_tx(&mut self, config: TxConfig) -> Result<(), Self::Error> {
         self.set_frequency(config.frequency)?;
         self.set_tx_power(config.power)?;
-        
+
         // Configure modulation parameters
         let sf = config.modulation.spreading_factor.clamp(6, 12);
         let bw = match config.modulation.bandwidth {
-            b if b <= 7_800 => 0,
-            b if b <= 10_400 => 1,
-            b if b <= 15_600 => 2,
-            b if b <= 20_800 => 3,
-            b if b <= 31_250 => 4,
-            b if b <= 41_700 => 5,
-            b if b <= 62_500 => 6,
-            b if b <= 125_000 => 7,
-            b if b <= 250_000 => 8,
+            b if b <= 7800 => 0,
+            b if b <= 10400 => 1,
+            b if b <= 15600 => 2,
+            b if b <= 20800 => 3,
+            b if b <= 31250 => 4,
+            b if b <= 41700 => 5,
+            b if b <= 62500 => 6,
+            b if b <= 125000 => 7,
+            b if b <= 250000 => 8,
             _ => 9,
         };
         let cr = config.modulation.coding_rate.clamp(5, 8) - 4;
 
         let modem_config1 = (bw << 4) | (cr << 1) | 0x00; // Explicit header mode
         let modem_config2 = (sf << 4) | 0x04; // CRC on
-        
+
         self.write_register(REG_MODEM_CONFIG_1, modem_config1)?;
         self.write_register(REG_MODEM_CONFIG_2, modem_config2)?;
 
@@ -328,60 +258,123 @@ where
 
     fn configure_rx(&mut self, config: RxConfig) -> Result<(), Self::Error> {
         self.set_frequency(config.frequency)?;
-        
-        // Configure modulation parameters (similar to TX)
+
+        // Configure modulation parameters
         let sf = config.modulation.spreading_factor.clamp(6, 12);
         let bw = match config.modulation.bandwidth {
-            b if b <= 7_800 => 0,
-            b if b <= 10_400 => 1,
-            b if b <= 15_600 => 2,
-            b if b <= 20_800 => 3,
-            b if b <= 31_250 => 4,
-            b if b <= 41_700 => 5,
-            b if b <= 62_500 => 6,
-            b if b <= 125_000 => 7,
-            b if b <= 250_000 => 8,
+            b if b <= 7800 => 0,
+            b if b <= 10400 => 1,
+            b if b <= 15600 => 2,
+            b if b <= 20800 => 3,
+            b if b <= 31250 => 4,
+            b if b <= 41700 => 5,
+            b if b <= 62500 => 6,
+            b if b <= 125000 => 7,
+            b if b <= 250000 => 8,
             _ => 9,
         };
         let cr = config.modulation.coding_rate.clamp(5, 8) - 4;
 
         let modem_config1 = (bw << 4) | (cr << 1) | 0x00;
         let modem_config2 = (sf << 4) | 0x04;
-        
+
         self.write_register(REG_MODEM_CONFIG_1, modem_config1)?;
         self.write_register(REG_MODEM_CONFIG_2, modem_config2)?;
 
-        // Start RX
-        self.set_mode(MODE_RX_CONTINUOUS)?;
+        // Set RX mode
+        self.set_mode(MODE_RX)?;
 
         Ok(())
     }
 
-    fn is_receiving(&mut self) -> Result<bool, Self::Error> {
-        let flags = self.read_register(REG_IRQ_FLAGS)?;
-        Ok((flags & IRQ_RX_DONE_MASK) != 0)
+    fn transmit(&mut self, data: &[u8]) -> Result<(), Self::Error> {
+        // Write data to FIFO
+        self.write_fifo(data)?;
+
+        // Set TX mode
+        self.set_mode(MODE_TX)?;
+
+        // Wait for TX done using DIO0
+        while !self.dio0.is_high().unwrap_or(false) {}
+
+        // Clear IRQ flags
+        self.write_register(REG_IRQ_FLAGS, IRQ_TX_DONE_MASK)?;
+
+        // Back to standby
+        self.set_mode(MODE_STDBY)?;
+
+        Ok(())
+    }
+
+    fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
+        // Set RX mode
+        self.set_mode(MODE_RX)?;
+
+        // Wait for RX done or timeout using DIO0 and DIO1
+        loop {
+            if self.dio0.is_high().unwrap_or(false) {
+                // RX done
+                break;
+            }
+            if self.dio1.is_high().unwrap_or(false) {
+                // RX timeout
+                return Ok(0);
+            }
+        }
+
+        // Read data from FIFO
+        self.read_fifo(buffer)?;
+
+        // Clear IRQ flags
+        self.write_register(REG_IRQ_FLAGS, IRQ_RX_DONE_MASK | IRQ_RX_TIMEOUT_MASK)?;
+
+        // Back to standby
+        self.set_mode(MODE_STDBY)?;
+
+        Ok(buffer.len())
     }
 
     fn get_rssi(&mut self) -> Result<i16, Self::Error> {
-        let rssi_value = self.read_register(REG_PKT_RSSI_VALUE)?;
-        Ok(-137 + rssi_value as i16)
+        let mut buffer = [0u8];
+        self.read_register(0x1B, &mut buffer, 1)?;
+        Ok(-157 + buffer[0] as i16)
     }
 
     fn get_snr(&mut self) -> Result<i8, Self::Error> {
-        let snr = self.read_register(REG_PKT_SNR_VALUE)?;
-        Ok((snr as i8) / 4)
+        let mut buffer = [0u8];
+        self.read_register(0x19, &mut buffer, 1)?;
+        Ok((buffer[0] as i8) / 4)
+    }
+
+    fn is_transmitting(&mut self) -> Result<bool, Self::Error> {
+        let mut buffer = [0u8];
+        self.read_register(REG_IRQ_FLAGS, &mut buffer, 1)?;
+        Ok((buffer[0] & IRQ_TX_DONE_MASK) != 0)
+    }
+
+    fn set_rx_gain(&mut self, gain: u8) -> Result<(), Self::Error> {
+        // LNA gain setting
+        let lna_gain = match gain {
+            0 => 0x20, // Max gain
+            1 => 0x40, // Max gain - 6dB
+            2 => 0x60, // Max gain - 12dB
+            3 => 0x80, // Max gain - 24dB
+            4 => 0xA0, // Max gain - 36dB
+            5 => 0xC0, // Max gain - 48dB
+            _ => 0x20, // Default to max gain
+        };
+        self.write_register(0x0C, lna_gain)
+    }
+
+    fn set_low_power_mode(&mut self, enabled: bool) -> Result<(), Self::Error> {
+        if enabled {
+            self.set_mode(MODE_SLEEP)
+        } else {
+            self.set_mode(MODE_STDBY)
+        }
     }
 
     fn sleep(&mut self) -> Result<(), Self::Error> {
         self.set_mode(MODE_SLEEP)
     }
-
-    fn standby(&mut self) -> Result<(), Self::Error> {
-        self.set_mode(MODE_STDBY)
-    }
-
-    fn is_transmitting(&mut self) -> Result<bool, Self::Error> {
-        let op_mode = self.read_register(REG_OP_MODE)?;
-        Ok((op_mode & 0x07) == MODE_TX)
-    }
-} 
+}

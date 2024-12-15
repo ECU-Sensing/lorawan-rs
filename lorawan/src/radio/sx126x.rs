@@ -110,13 +110,7 @@ where
     BUSY: InputPin,
     DIO1: InputPin,
 {
-    pub fn new(
-        spi: SPI,
-        cs: CS,
-        reset: RESET,
-        busy: BUSY,
-        dio1: DIO1,
-    ) -> Result<Self, RadioError> {
+    pub fn new(spi: SPI, cs: CS, reset: RESET, busy: BUSY, dio1: DIO1) -> Result<Self, RadioError> {
         let mut radio = Self {
             spi,
             cs,
@@ -252,12 +246,12 @@ where
 
         // Set packet parameters
         let packet_params = [
-            0x00, // Preamble length MSB
-            0x08, // Preamble length LSB
-            0x00, // Header type (explicit)
+            0x00,               // Preamble length MSB
+            0x08,               // Preamble length LSB
+            0x00,               // Header type (explicit)
             buffer.len() as u8, // Payload length
-            0x01, // CRC on
-            0x00, // Standard IQ
+            0x01,               // CRC on
+            0x00,               // Standard IQ
         ];
         self.write_command(commands::SET_PKT_PARAMS, &packet_params)?;
 
@@ -300,7 +294,9 @@ where
         self.spi
             .write(&[commands::READ_BUFFER, 0x00])
             .map_err(|_| RadioError::Spi)?;
-        self.spi.transfer(&mut buffer[..len]).map_err(|_| RadioError::Spi)?;
+        self.spi
+            .transfer(&mut buffer[..len])
+            .map_err(|_| RadioError::Spi)?;
         self.cs.set_high().map_err(|_| RadioError::Gpio)?;
 
         // Clear IRQ status
@@ -329,9 +325,9 @@ where
         let cr = config.modulation.coding_rate.clamp(5, 8) - 4;
 
         let mod_params = [
-            sf, // SF5-SF12
-            bw, // Bandwidth
-            cr, // Coding rate
+            sf,   // SF5-SF12
+            bw,   // Bandwidth
+            cr,   // Coding rate
             0x00, // Low data rate optimize off
         ];
 
@@ -357,10 +353,7 @@ where
         let cr = config.modulation.coding_rate.clamp(5, 8) - 4;
 
         let mod_params = [
-            sf,
-            bw,
-            cr,
-            0x00, // Low data rate optimize off
+            sf, bw, cr, 0x00, // Low data rate optimize off
         ];
 
         self.write_command(commands::SET_MODULATION_PARAMS, &mod_params)?;
@@ -400,4 +393,4 @@ where
         self.read_command(commands::GET_IRQ_STATUS, &mut status)?;
         Ok((status[0] & 0x01) != 0) // TX done bit
     }
-} 
+}

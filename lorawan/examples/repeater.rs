@@ -1,50 +1,48 @@
 #![no_std]
 #![no_main]
 
+use atsamd21_hal as hal;
 use cortex_m_rt::entry;
 use panic_halt as _;
-use atsamd21_hal as hal;
 
 use hal::{
     clock::GenericClockController,
     delay::Delay,
-    gpio::{
-        Pa8, Pa9, Pa10, Pa11, Pa12, Pa13, Pa14, Pa17,
-        Output, Input, Floating, PushPull,
-    },
+    gpio::{Floating, Input, Output, Pa10, Pa11, Pa12, Pa13, Pa14, Pa17, Pa8, Pa9, PushPull},
     prelude::*,
     sercom::{I2CMaster4, SPIMaster0},
     time::Hertz,
 };
 
 use lorawan::{
-    config::device::DeviceConfig,
-    device::LoRaWANDevice,
-    class::OperatingMode,
+    config::device::SessionState,
     lorawan::{
-        region::US915,
-        mac::{MacLayer, MacError},
+        mac::MacLayer,
+        region::{Region, US915},
     },
-    radio::sx127x::SX127x,
+    radio::{
+        sx127x::SX127x,
+        traits::{Radio, RxConfig},
+    },
 };
 
 // Type aliases for SPI and GPIO configurations
 type Spi = SPIMaster0<
-    hal::sercom::Sercom0Pad2<Pa10<hal::gpio::PfD>>,  // MISO - MI pin
-    hal::sercom::Sercom0Pad3<Pa11<hal::gpio::PfD>>,  // MOSI - MO pin
-    hal::sercom::Sercom0Pad1<Pa9<hal::gpio::PfD>>,   // SCK - SCK pin
+    hal::sercom::Sercom0Pad2<Pa10<hal::gpio::PfD>>, // MISO - MI pin
+    hal::sercom::Sercom0Pad3<Pa11<hal::gpio::PfD>>, // MOSI - MO pin
+    hal::sercom::Sercom0Pad1<Pa9<hal::gpio::PfD>>,  // SCK - SCK pin
 >;
 
 type RadioPins = (
-    Pa8<Output<PushPull>>,    // CS - D8
-    Pa14<Output<PushPull>>,   // RESET - D4
-    Pa9<Input<Floating>>,     // DIO0 - D3
-    Pa10<Input<Floating>>,    // DIO1 - D6
+    Pa8<Output<PushPull>>,  // CS - D8
+    Pa14<Output<PushPull>>, // RESET - D4
+    Pa9<Input<Floating>>,   // DIO0 - D3
+    Pa10<Input<Floating>>,  // DIO1 - D6
 );
 
 // Add LED type aliases
-type RedLed = Pa17<Output<PushPull>>;    // Built-in red LED on pin 13
-type BlueLed = Pa10<Output<PushPull>>;   // Built-in blue LED on pin 32
+type RedLed = Pa17<Output<PushPull>>; // Built-in red LED on pin 13
+type BlueLed = Pa10<Output<PushPull>>; // Built-in blue LED on pin 32
 
 /// LED status patterns
 struct StatusLeds {
@@ -55,8 +53,8 @@ struct StatusLeds {
 
 impl StatusLeds {
     fn new(red: RedLed, blue: BlueLed) -> Self {
-        Self { 
-            red, 
+        Self {
+            red,
             blue,
             packet_count: 0,
         }
@@ -179,15 +177,16 @@ fn main() -> ! {
     let blue_led = pins.d32.into_push_pull_output();
     let mut status_leds = StatusLeds::new(red_led, blue_led);
 
-    // Initialize radio with debug output
-    let mut radio = match SX127x::new(spi, cs, reset, dio0, dio1, &mut delay) {
+    // Initialize radio
+    let radio = match SX127x::new(spi, (cs, reset, dio0, dio1)) {
         Ok(radio) => {
             status_leds.indicate_init_success(&mut delay);
             radio
         }
         Err(_) => {
             status_leds.indicate_init_failure(&mut delay);
-            loop { // Halt with error pattern
+            loop {
+                // Halt with error pattern
                 status_leds.red.set_high().ok();
                 delay.delay_ms(100u32);
                 status_leds.red.set_low().ok();
@@ -196,19 +195,23 @@ fn main() -> ! {
         }
     };
 
-    // Configure radio with TTN US915 sub-band 2 settings
-    if let Err(_) = radio.init() {
-        status_leds.indicate_error(&mut delay);
-        loop {
-            delay.delay_ms(1000u32);
-        }
-    }
+    // Create region configuration
+    let region = US915::new();
+    
+    // Create initial session state
+    let session = SessionState::new();
 
-    // Configure for TTN US915 sub-band 2 (channels 8-15)
+    // Create MAC layer
+    let mut mac = MacLayer::new(radio, region, session);
+
+    // Configure for TTN US915
+    mac.configure_for_ttn().unwrap();
+
+    // Configure radio for continuous receive
     let base_freq = 903_900_000; // Start of sub-band 2
-    radio.set_frequency(base_freq).unwrap();
-    radio.set_rx_config(
-        lorawan::radio::traits::RxConfig {
+    mac.get_radio_mut().set_frequency(base_freq).unwrap();
+    mac.get_radio_mut()
+        .configure_rx(RxConfig {
             frequency: base_freq,
             modulation: lorawan::radio::traits::ModulationParams {
                 spreading_factor: 7,
@@ -216,11 +219,11 @@ fn main() -> ! {
                 coding_rate: 5,
             },
             timeout_ms: 0, // Continuous receive
-        }
-    ).unwrap();
+        })
+        .unwrap();
 
     // Set PA config for RFM95 (high power settings)
-    radio.set_tx_power(20).unwrap(); // Set to 20dBm for maximum power
+    mac.get_radio_mut().set_tx_power(20).unwrap(); // Set to 20dBm for maximum power
 
     // Main loop with LED status indicators
     let mut rx_buffer = [0u8; 255];
@@ -229,15 +232,15 @@ fn main() -> ! {
         status_leds.indicate_listening();
 
         // Receive packet
-        match radio.receive(&mut rx_buffer) {
+        match mac.get_radio_mut().receive(&mut rx_buffer) {
             Ok(len) if len > 0 => {
                 status_leds.indicate_packet_received();
-                
+
                 // Validate packet
                 if let Some(valid) = validate_lorawan_packet(&rx_buffer[..len]) {
                     if valid {
                         // Get the frequency we received on
-                        let current_freq = match radio.get_frequency() {
+                        let current_freq = match mac.get_radio_mut().get_frequency() {
                             Ok(freq) => freq,
                             Err(_) => {
                                 status_leds.indicate_error(&mut delay);
@@ -246,9 +249,9 @@ fn main() -> ! {
                         };
 
                         status_leds.indicate_packet_forwarding();
-                        
+
                         // Forward packet on same frequency
-                        match radio.transmit(&rx_buffer[..len]) {
+                        match mac.get_radio_mut().transmit(&rx_buffer[..len]) {
                             Ok(_) => {
                                 status_leds.indicate_packet_forwarded();
                             }
@@ -274,18 +277,10 @@ fn main() -> ! {
 /// Returns Some(true) if packet should be forwarded, Some(false) if not, None if invalid
 fn validate_lorawan_packet(data: &[u8]) -> Option<bool> {
     if data.len() < 8 {
-        return None;  // Packet too short to be valid LoRaWAN
+        return None; // Packet too short to be valid LoRaWAN
     }
 
     let mtype = data[0] & 0xE0;
     // Accept uplink data (0x40) and downlink data (0x80) messages
     Some(mtype == 0x40 || mtype == 0x80)
 }
-
-/// Helper function to check if a packet is a duplicate
-/// (could be implemented to prevent forwarding the same packet multiple times)
-fn is_duplicate(packet: &[u8]) -> bool {
-    // Implement duplicate detection logic here if needed
-    // For example, keep a rolling history of frame counters per DevAddr
-    false
-} 

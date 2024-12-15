@@ -1,18 +1,18 @@
 //! LoRaWAN Repeater with Metrics Example for Adafruit Feather M0 with RFM95
-//! 
+//!
 //! This example implements a LoRaWAN repeater that:
 //! - Functions as a standard packet repeater using lazy frequency hopping
 //! - Acts as a LoRaWAN end node to report metrics
 //! - Reports number of forwarded packets periodically
 //! - Supports remote reboot command
-//! 
+//!
 //! Lazy frequency hopping means the repeater retransmits packets on
 //! the same frequency they were received on, letting the end devices
 //! control the frequency hopping pattern.
-//! 
+//!
 //! # Hardware Setup
 //! Same as repeater.rs, designed for Adafruit Feather M0 with RFM95 (Product #3178)
-//! 
+//!
 //! # LED Status Patterns
 //! Combines patterns from both repeater and end-node:
 //! 1. Radio Init & Join
@@ -29,9 +29,9 @@
 #![no_std]
 #![no_main]
 
+use atsamd21_hal as hal;
 use cortex_m_rt::entry;
 use panic_halt as _;
-use atsamd21_hal as hal;
 
 use core::sync::atomic::{AtomicU32, Ordering};
 use heapless::Vec;
@@ -39,25 +39,22 @@ use heapless::Vec;
 use hal::{
     clock::GenericClockController,
     delay::Delay,
-    gpio::{
-        Pa8, Pa9, Pa10, Pa11, Pa12, Pa13, Pa14, Pa17,
-        Output, Input, Floating, PushPull,
-    },
+    gpio::{Floating, Input, Output, Pa10, Pa11, Pa12, Pa13, Pa14, Pa17, Pa8, Pa9, PushPull},
     prelude::*,
     sercom::{I2CMaster4, SPIMaster0},
     time::Hertz,
 };
 
 use lorawan::{
-    config::device::DeviceConfig,
-    device::{LoRaWANDevice, DeviceState},
-    class::OperatingMode,
+    config::device::{AESKey, DeviceConfig, SessionState},
     lorawan::{
-        region::US915,
-        mac::{MacLayer, MacError},
-        commands::{CommandHandler, DownlinkCommand},
+        mac::MacLayer,
+        region::{Region, US915},
     },
-    radio::sx127x::SX127x,
+    radio::{
+        sx127x::SX127x,
+        traits::{Radio, RxConfig},
+    },
 };
 
 // Metrics reporting interval (60 seconds)
@@ -68,21 +65,21 @@ static PACKET_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 // Type definitions for SPI and GPIO
 type Spi = SPIMaster0<
-    hal::sercom::Sercom0Pad2<Pa10<hal::gpio::PfD>>,  // MISO - MI pin
-    hal::sercom::Sercom0Pad3<Pa11<hal::gpio::PfD>>,  // MOSI - MO pin
-    hal::sercom::Sercom0Pad1<Pa9<hal::gpio::PfD>>,   // SCK - SCK pin
+    hal::sercom::Sercom0Pad2<Pa10<hal::gpio::PfD>>, // MISO - MI pin
+    hal::sercom::Sercom0Pad3<Pa11<hal::gpio::PfD>>, // MOSI - MO pin
+    hal::sercom::Sercom0Pad1<Pa9<hal::gpio::PfD>>,  // SCK - SCK pin
 >;
 
 type RadioPins = (
-    Pa8<Output<PushPull>>,    // CS - D8
-    Pa14<Output<PushPull>>,   // RESET - D4
-    Pa9<Input<Floating>>,     // DIO0 - D3
-    Pa10<Input<Floating>>,    // DIO1 - D6
+    Pa8<Output<PushPull>>,  // CS - D8
+    Pa14<Output<PushPull>>, // RESET - D4
+    Pa9<Input<Floating>>,   // DIO0 - D3
+    Pa10<Input<Floating>>,  // DIO1 - D6
 );
 
 // LED type aliases
-type RedLed = Pa17<Output<PushPull>>;    // Built-in red LED on pin 13
-type BlueLed = Pa10<Output<PushPull>>;   // Built-in blue LED on pin 32
+type RedLed = Pa17<Output<PushPull>>; // Built-in red LED on pin 13
+type BlueLed = Pa10<Output<PushPull>>; // Built-in blue LED on pin 32
 
 /// LED status patterns
 struct StatusLeds {
@@ -95,7 +92,69 @@ impl StatusLeds {
         Self { red, blue }
     }
 
-    // ... existing LED patterns ...
+    /// Indicate radio initialization
+    fn indicate_init_success(&mut self, delay: &mut Delay) {
+        // Blink both LEDs twice
+        for _ in 0..2 {
+            self.blue.set_high().ok();
+            self.red.set_high().ok();
+            delay.delay_ms(100u32);
+            self.blue.set_low().ok();
+            self.red.set_low().ok();
+            delay.delay_ms(100u32);
+        }
+    }
+
+    /// Indicate radio initialization failure
+    fn indicate_init_failure(&mut self, delay: &mut Delay) {
+        // Rapid red LED blinks
+        for _ in 0..5 {
+            self.red.set_high().ok();
+            delay.delay_ms(50u32);
+            self.red.set_low().ok();
+            delay.delay_ms(50u32);
+        }
+    }
+
+    /// Indicate listening mode
+    fn indicate_listening(&mut self) {
+        self.blue.set_low().ok();
+        // Slow breathing pattern on red LED
+        self.red.toggle().ok();
+    }
+
+    /// Indicate packet reception
+    fn indicate_packet_received(&mut self) {
+        self.blue.set_high().ok();
+        self.red.set_high().ok();
+    }
+
+    /// Indicate packet forwarding
+    fn indicate_packet_forwarding(&mut self) {
+        self.blue.set_high().ok();
+        self.red.set_low().ok();
+    }
+
+    /// Indicate packet forwarded successfully
+    fn indicate_packet_forwarded(&mut self) {
+        self.blue.set_low().ok();
+        // Quick double blink on success
+        self.red.set_high().ok();
+        self.red.set_low().ok();
+    }
+
+    /// Indicate error
+    fn indicate_error(&mut self, delay: &mut Delay) {
+        // Quick triple blink of both LEDs
+        for _ in 0..3 {
+            self.blue.set_high().ok();
+            self.red.set_high().ok();
+            delay.delay_ms(50u32);
+            self.blue.set_low().ok();
+            self.red.set_low().ok();
+            delay.delay_ms(50u32);
+        }
+    }
 
     /// Indicate metrics transmission
     fn indicate_metrics_tx(&mut self, delay: &mut Delay) {
@@ -125,9 +184,13 @@ impl RepeaterMetrics {
     fn to_bytes(&self) -> Vec<u8, 32> {
         let mut buffer = Vec::new();
         // Packets forwarded (4 bytes)
-        buffer.extend_from_slice(&self.packets_forwarded.to_be_bytes()).unwrap();
+        buffer
+            .extend_from_slice(&self.packets_forwarded.to_be_bytes())
+            .unwrap();
         // Last RSSI (2 bytes)
-        buffer.extend_from_slice(&self.last_rssi.to_be_bytes()).unwrap();
+        buffer
+            .extend_from_slice(&self.last_rssi.to_be_bytes())
+            .unwrap();
         // Last SNR (1 byte)
         buffer.push(self.last_snr as u8).unwrap();
         buffer
@@ -148,7 +211,7 @@ fn main() -> ! {
     let mut delay = Delay::new(core.SYST, &mut clocks);
     let pins = hal::Pins::new(peripherals.PORT);
 
-    // Configure pins and SPI (same as repeater.rs)
+    // Configure pins and SPI
     let miso = pins.mi.into_pad(&mut peripherals.PORT);
     let mosi = pins.mo.into_pad(&mut peripherals.PORT);
     let sck = pins.sck.into_pad(&mut peripherals.PORT);
@@ -175,7 +238,7 @@ fn main() -> ! {
     let mut status_leds = StatusLeds::new(red_led, blue_led);
 
     // Initialize radio
-    let radio = match SX127x::new(spi, cs, reset, dio0, dio1, &mut delay) {
+    let radio = match SX127x::new(spi, (cs, reset, dio0, dio1)) {
         Ok(radio) => {
             status_leds.indicate_init_success(&mut delay);
             radio
@@ -191,65 +254,58 @@ fn main() -> ! {
         }
     };
 
-    // Create LoRaWAN device configuration for metrics reporting
+    // Create device configuration for metrics reporting
     let config = DeviceConfig::new_otaa(
-        // DevEUI in LSB format (least significant byte first)
-        // Example: If your DevEUI is "0123456789ABCDEF", enter it as:
-        // [0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01]
-        [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-
-        // AppEUI/JoinEUI in LSB format (least significant byte first)
-        // Example: If your AppEUI is "0123456789ABCDEF", enter it as:
-        // [0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01]
-        [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-
-        // AppKey in MSB format (most significant byte first)
-        // Example: If your AppKey is "0123456789ABCDEF0123456789ABCDEF", enter it as:
-        // [0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF,
-        //  0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF]
-        [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], // DevEUI
+        [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], // AppEUI
+        AESKey::new([0x00; 16]), // AppKey
     );
 
-    // Create region configuration and LoRaWAN device
+    // Create region configuration
     let region = US915::new();
-    let mut lorawan_device = match LoRaWANDevice::new(
-        radio,
-        config,
-        region,
-        OperatingMode::ClassA,
-    ) {
-        Ok(device) => device,
-        Err(_) => {
-            status_leds.indicate_error(&mut delay);
-            loop {
-                delay.delay_ms(1000u32);
-            }
-        }
-    };
+    
+    // Create initial session state
+    let session = SessionState::new();
+
+    // Create MAC layer
+    let mut mac = MacLayer::new(radio, region, session);
 
     // Configure for TTN US915
-    if let Err(_) = lorawan_device.mac().configure_for_ttn() {
-        status_leds.indicate_error(&mut delay);
-        loop {
-            delay.delay_ms(1000u32);
-        }
-    }
+    mac.configure_for_ttn().unwrap();
 
-    // Join network using OTAA
+    // Join network using OTAA for metrics reporting
     loop {
-        status_leds.indicate_joining(&mut delay);
-        match lorawan_device.join_otaa() {
+        match mac.join_request(
+            config.dev_eui,
+            config.app_eui,
+            config.app_key.clone(),
+        ) {
             Ok(_) => {
-                status_leds.indicate_join_success(&mut delay);
                 break;
             }
             Err(_) => {
-                status_leds.indicate_join_failure(&mut delay);
                 delay.delay_ms(5000u32);
             }
         }
     }
+
+    // Configure radio for continuous receive
+    let base_freq = 903_900_000; // Start of sub-band 2
+    mac.get_radio_mut().set_frequency(base_freq).unwrap();
+    mac.get_radio_mut()
+        .configure_rx(RxConfig {
+            frequency: base_freq,
+            modulation: lorawan::radio::traits::ModulationParams {
+                spreading_factor: 7,
+                bandwidth: 125_000,
+                coding_rate: 5,
+            },
+            timeout_ms: 0, // Continuous receive
+        })
+        .unwrap();
+
+    // Set PA config for RFM95 (high power settings)
+    mac.get_radio_mut().set_tx_power(20).unwrap();
 
     // Initialize metrics
     let mut metrics = RepeaterMetrics::default();
@@ -261,57 +317,25 @@ fn main() -> ! {
         // Show listening status
         status_leds.indicate_listening();
 
-        // Check if it's time to send metrics
-        if last_metrics_time >= METRICS_INTERVAL_MS {
-            // Update metrics from atomic counter
-            metrics.packets_forwarded = PACKET_COUNTER.load(Ordering::Relaxed);
-            
-            // Send metrics
-            status_leds.indicate_metrics_tx(&mut delay);
-            if let Ok(_) = lorawan_device.send_uplink(2, &metrics.to_bytes(), true) {
-                // Process any downlink commands
-                if let Ok(Some(command)) = lorawan_device.process() {
-                    match command {
-                        DownlinkCommand::Reboot => {
-                            // Trigger system reset
-                            cortex_m::peripheral::SCB::sys_reset();
-                        }
-                        _ => {} // Ignore other commands
-                    }
-                }
-            }
-            
-            last_metrics_time = 0;
-        }
-
-        // Repeater functionality
-        match lorawan_device.radio().receive(&mut rx_buffer) {
+        // Receive packet
+        match mac.get_radio_mut().receive(&mut rx_buffer) {
             Ok(len) if len > 0 => {
                 status_leds.indicate_packet_received();
-                
+
+                // Update metrics
+                metrics.last_rssi = mac.get_radio_mut().get_rssi().unwrap_or(0);
+                metrics.last_snr = mac.get_radio_mut().get_snr().unwrap_or(0);
+
+                // Validate packet
                 if let Some(valid) = validate_lorawan_packet(&rx_buffer[..len]) {
                     if valid {
-                        // Get current frequency (the one we received on)
-                        let current_freq = match lorawan_device.radio().get_frequency() {
-                            Ok(freq) => freq,
-                            Err(_) => {
-                                status_leds.indicate_error(&mut delay);
-                                continue;
-                            }
-                        };
-
                         status_leds.indicate_packet_forwarding();
-                        
-                        // Forward packet on same frequency
-                        match lorawan_device.radio().transmit(&rx_buffer[..len]) {
-                            Ok(_) => {
-                                status_leds.indicate_packet_forwarded();
-                                // Increment packet counter atomically
-                                PACKET_COUNTER.fetch_add(1, Ordering::Relaxed);
-                            }
-                            Err(_) => {
-                                status_leds.indicate_error(&mut delay);
-                            }
+
+                        // Forward packet
+                        if let Ok(_) = mac.get_radio_mut().transmit(&rx_buffer[..len]) {
+                            status_leds.indicate_packet_forwarded();
+                            metrics.packets_forwarded = metrics.packets_forwarded.wrapping_add(1);
+                            PACKET_COUNTER.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                 }
@@ -319,22 +343,34 @@ fn main() -> ! {
             Err(_) => {
                 status_leds.indicate_error(&mut delay);
             }
-            _ => {}
+            _ => {} // No packet received
         }
 
-        // Update timing
-        last_metrics_time = last_metrics_time.saturating_add(10);
+        // Send metrics if interval elapsed
+        let current_time = cortex_m::peripheral::SYST::get_current()
+            .expect("SYST counter should be available");
+        if current_time.wrapping_sub(last_metrics_time) >= METRICS_INTERVAL_MS {
+            status_leds.indicate_metrics_tx(&mut delay);
+
+            // Send metrics on port 2
+            if let Ok(_) = mac.send_unconfirmed(2, &metrics.to_bytes()) {
+                last_metrics_time = current_time;
+            }
+        }
+
+        // Small delay to prevent tight loop
         delay.delay_ms(10u32);
     }
 }
 
-// Validate LoRaWAN packet - only check if it's a valid LoRaWAN message type
+/// Validate a LoRaWAN packet
+/// Returns Some(true) if packet should be forwarded, Some(false) if not, None if invalid
 fn validate_lorawan_packet(data: &[u8]) -> Option<bool> {
     if data.len() < 8 {
-        return None;  // Packet too short to be valid LoRaWAN
+        return None; // Packet too short to be valid LoRaWAN
     }
 
     let mtype = data[0] & 0xE0;
     // Accept uplink data (0x40) and downlink data (0x80) messages
     Some(mtype == 0x40 || mtype == 0x80)
-} 
+}

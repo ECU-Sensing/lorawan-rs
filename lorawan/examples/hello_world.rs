@@ -1,12 +1,12 @@
 //! Hello World Example for Adafruit Feather M0 with RFM95
-//! 
+//!
 //! This example demonstrates basic LoRaWAN connectivity using OTAA with TTN.
 //! It properly implements frequency hopping and uses TTN's US915 channel plan.
-//! 
+//!
 //! # Hardware Setup
 //! - Adafruit Feather M0 with RFM95 LoRa Radio (900MHz) - Product #3178
 //! - Antenna (915MHz tuned)
-//! 
+//!
 //! # LED Status Patterns
 //! - Radio Init: Blue LED blinks twice
 //! - Join Request: Both LEDs alternate
@@ -15,7 +15,7 @@
 //! - Transmitting: Blue LED on
 //! - Transmission Success: Blue LED blinks once
 //! - Error: Both LEDs blink three times
-//! 
+//!
 //! # TTN Configuration
 //! 1. Create a new application in TTN Console
 //! 2. Register a new device with:
@@ -30,50 +30,46 @@
 #![no_std]
 #![no_main]
 
+use atsamd21_hal as hal;
 use cortex_m_rt::entry;
 use panic_halt as _;
-use atsamd21_hal as hal;
 
 use hal::{
     clock::GenericClockController,
     delay::Delay,
-    gpio::{
-        Pa8, Pa9, Pa10, Pa11, Pa12, Pa13, Pa14, Pa17,
-        Output, Input, Floating, PushPull,
-    },
+    gpio::{Floating, Input, Output, Pa10, Pa11, Pa12, Pa13, Pa14, Pa17, Pa8, Pa9, PushPull},
     prelude::*,
     sercom::{I2CMaster4, SPIMaster0},
-    time::Hertz,
+    time::U32Ext,
 };
 
 use lorawan::{
-    config::device::DeviceConfig,
-    device::{LoRaWANDevice, DeviceState},
-    class::OperatingMode,
+    config::device::{AESKey, DeviceConfig},
+    device::Device,
     lorawan::{
+        class::OperatingMode,
         region::US915,
-        mac::{MacLayer, MacError},
     },
     radio::sx127x::SX127x,
 };
 
 // Type definitions for SPI and GPIO
 type Spi = SPIMaster0<
-    hal::sercom::Sercom0Pad2<Pa10<hal::gpio::PfD>>,  // MISO - MI pin
-    hal::sercom::Sercom0Pad3<Pa11<hal::gpio::PfD>>,  // MOSI - MO pin
-    hal::sercom::Sercom0Pad1<Pa9<hal::gpio::PfD>>,   // SCK - SCK pin
+    hal::sercom::Sercom0Pad2<Pa10<hal::gpio::PfD>>, // MISO - MI pin
+    hal::sercom::Sercom0Pad3<Pa11<hal::gpio::PfD>>, // MOSI - MO pin
+    hal::sercom::Sercom0Pad1<Pa9<hal::gpio::PfD>>,  // SCK - SCK pin
 >;
 
 type RadioPins = (
-    Pa8<Output<PushPull>>,    // CS - D8
-    Pa14<Output<PushPull>>,   // RESET - D4
-    Pa9<Input<Floating>>,     // DIO0 - D3
-    Pa10<Input<Floating>>,    // DIO1 - D6
+    Pa8<Output<PushPull>>,  // CS - D8
+    Pa14<Output<PushPull>>, // RESET - D4
+    Pa9<Input<Floating>>,   // DIO0 - D3
+    Pa10<Input<Floating>>,  // DIO1 - D6
 );
 
 // LED type aliases
-type RedLed = Pa17<Output<PushPull>>;    // Built-in red LED on pin 13
-type BlueLed = Pa10<Output<PushPull>>;   // Built-in blue LED on pin 32
+type RedLed = Pa17<Output<PushPull>>; // Built-in red LED on pin 13
+type BlueLed = Pa10<Output<PushPull>>; // Built-in blue LED on pin 32
 
 /// LED status patterns
 struct StatusLeds {
@@ -185,7 +181,7 @@ fn main() -> ! {
     // Initialize SPI
     let spi = SPIMaster0::new(
         &clocks.sercom0_core(&mut peripherals.GCLK).unwrap(),
-        Hertz(8_000_000),
+        8.mhz(),
         hal::hal::spi::Mode {
             phase: hal::hal::spi::Phase::CaptureOnFirstTransition,
             polarity: hal::hal::spi::Polarity::IdleLow,
@@ -220,30 +216,24 @@ fn main() -> ! {
         // Example: If your DevEUI is "0123456789ABCDEF", enter it as:
         // [0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01]
         [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-
         // AppEUI/JoinEUI in LSB format (least significant byte first)
         // Example: If your AppEUI is "0123456789ABCDEF", enter it as:
         // [0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01]
         [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-
         // AppKey in MSB format (most significant byte first)
-        // Example: If your AppKey is "0123456789ABCDEF0123456789ABCDEF", enter it as:
-        // [0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF,
-        //  0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF]
-        [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        // Example: If your AppKey is "0123456789ABCDEF0123456789ABCDEF", enter it as is:
+        AESKey::new([
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ]),
     );
 
     // Create region configuration
-    let region = US915::new();
+    let mut region = US915::new();
+    region.set_sub_band(2); // Configure for TTN US915 sub-band 2
 
     // Create LoRaWAN device
-    let mut lorawan_device = match LoRaWANDevice::new(
-        radio,
-        config,
-        region,
-        OperatingMode::ClassA,
-    ) {
+    let mut device = match Device::new(radio, config, region, OperatingMode::ClassA) {
         Ok(device) => device,
         Err(_) => {
             status_leds.indicate_error(&mut delay);
@@ -253,47 +243,36 @@ fn main() -> ! {
         }
     };
 
-    // Configure for TTN US915
-    if let Err(_) = lorawan_device.mac().configure_for_ttn() {
-        status_leds.indicate_error(&mut delay);
-        loop {
-            delay.delay_ms(1000u32);
-        }
-    }
-
-    // Join network using OTAA
-    loop {
-        status_leds.indicate_joining(&mut delay);
-        match lorawan_device.join_otaa() {
-            Ok(_) => {
-                status_leds.indicate_join_success(&mut delay);
-                break;
-            }
-            Err(_) => {
-                status_leds.indicate_join_failure(&mut delay);
-                delay.delay_ms(5000u32);
+    // Join the network
+    status_leds.indicate_joining(&mut delay);
+    match device.join_otaa() {
+        Ok(_) => status_leds.indicate_join_success(&mut delay),
+        Err(_) => {
+            status_leds.indicate_join_failure(&mut delay);
+            loop {
+                delay.delay_ms(1000u32);
             }
         }
     }
 
-    // Main loop - send "Hello, World!" every 60 seconds
+    // Main loop - send "Hello, LoRaWAN!" every 60 seconds
     let mut counter = 0u32;
+    let mut message = [0u8; 32];
     loop {
-        let message = b"Hello, World!";
-        
-        // Send unconfirmed uplink on port 1
         status_leds.indicate_transmitting();
-        if let Ok(_) = lorawan_device.send_uplink(1, message, false) {
-            status_leds.indicate_tx_success(&mut delay);
-            
-            // Process any downlink messages
-            lorawan_device.process().ok();
-        } else {
-            status_leds.indicate_error(&mut delay);
+        
+        // Format message with counter
+        let msg = b"Hello, LoRaWAN! Count: ";
+        message[..msg.len()].copy_from_slice(msg);
+        let count_str = counter.to_string();
+        message[msg.len()..msg.len() + count_str.len()].copy_from_slice(count_str.as_bytes());
+        
+        match device.send_unconfirmed(1, &message[..msg.len() + count_str.len()]) {
+            Ok(_) => status_leds.indicate_tx_success(&mut delay),
+            Err(_) => status_leds.indicate_error(&mut delay),
         }
 
-        // Wait 60 seconds before next transmission
-        delay.delay_ms(60_000u32);
         counter = counter.wrapping_add(1);
+        delay.delay_ms(60_000u32);
     }
-} 
+}

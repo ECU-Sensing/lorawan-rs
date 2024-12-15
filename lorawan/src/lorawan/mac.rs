@@ -1,41 +1,94 @@
 use heapless::Vec;
 
-use crate::config::device::{AESKey, DevAddr, EUI64, SessionState};
+use super::commands::MacCommand;
+use super::phy::PhyLayer;
+use super::region::{Channel, DataRate, Region, US915};
+use crate::config::device::{AESKey, DevAddr, SessionState};
 use crate::crypto::{self, Direction, MIC_SIZE};
-use super::region::{Channel, DataRate, Region};
-use super::phy::{PhyLayer, PhyConfig};
-use crate::radio::Radio;
+use crate::radio::traits::Radio;
 
 /// Maximum MAC payload size
-pub const MAX_MAC_PAYLOAD_SIZE: usize = 242;
+pub const MAX_MAC_PAYLOAD: usize = 242;
 
-/// MAC header types
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(u8)]
-pub enum MType {
-    JoinRequest = 0x00,
-    JoinAccept = 0x20,
-    UnconfirmedDataUp = 0x40,
-    UnconfirmedDataDown = 0x60,
-    ConfirmedDataUp = 0x80,
-    ConfirmedDataDown = 0xA0,
-    RejoinRequest = 0xC0,
-    Proprietary = 0xE0,
+/// Maximum frame size
+pub const MAX_FRAME_SIZE: usize = 256;
+
+/// Maximum number of MAC commands
+pub const MAX_MAC_COMMANDS: usize = 8;
+
+/// MAC layer errors
+#[derive(Debug)]
+pub enum MacError<E> {
+    /// Radio error
+    Radio(E),
+    /// Invalid frame format
+    InvalidFrame,
+    /// Invalid length
+    InvalidLength,
+    /// Invalid value
+    InvalidValue,
+    /// Unknown command
+    UnknownCommand,
+    /// Buffer too small
+    BufferTooSmall,
+    /// Not joined to network
+    NotJoined,
+    /// Invalid MIC
+    InvalidMic,
+    /// Invalid address
+    InvalidAddress,
+    /// Invalid frequency
+    InvalidFrequency,
+    /// Invalid data rate
+    InvalidDataRate,
+    /// Invalid channel
+    InvalidChannel,
+    /// Invalid port
+    InvalidPort,
+    /// Invalid payload size
+    InvalidPayloadSize,
+    /// Invalid configuration
+    InvalidConfig,
+    /// Timeout
+    Timeout,
 }
 
-/// Frame header flags
+impl<E> From<E> for MacError<E> {
+    fn from(error: E) -> Self {
+        MacError::Radio(error)
+    }
+}
+
+/// Frame control field
 #[derive(Debug, Clone, Copy)]
 pub struct FCtrl {
+    /// Adaptive data rate enabled
     pub adr: bool,
+    /// ADR acknowledgment request
     pub adr_ack_req: bool,
+    /// Frame pending bit
     pub ack: bool,
-    pub f_pending: bool,
-    pub f_opts_len: u8,
+    /// Frame pending bit
+    pub fpending: bool,
+    /// FOpts field length
+    pub foptslen: u8,
 }
 
 impl FCtrl {
-    fn to_byte(&self) -> u8 {
-        let mut byte = self.f_opts_len & 0x0F;
+    /// Create a new frame control field with default values
+    pub fn new() -> Self {
+        Self {
+            adr: false,
+            adr_ack_req: false,
+            ack: false,
+            fpending: false,
+            foptslen: 0,
+        }
+    }
+
+    /// Convert frame control field to byte representation
+    pub fn to_byte(&self) -> u8 {
+        let mut byte = 0;
         if self.adr {
             byte |= 0x80;
         }
@@ -45,36 +98,33 @@ impl FCtrl {
         if self.ack {
             byte |= 0x20;
         }
-        if self.f_pending {
+        if self.fpending {
             byte |= 0x10;
         }
+        byte |= self.foptslen & 0x0F;
         byte
-    }
-
-    fn from_byte(byte: u8) -> Self {
-        Self {
-            adr: (byte & 0x80) != 0,
-            adr_ack_req: (byte & 0x40) != 0,
-            ack: (byte & 0x20) != 0,
-            f_pending: (byte & 0x10) != 0,
-            f_opts_len: byte & 0x0F,
-        }
     }
 }
 
 /// Frame header
 #[derive(Debug)]
 pub struct FHDR {
+    /// Device address
     pub dev_addr: DevAddr,
+    /// Frame control field
     pub f_ctrl: FCtrl,
+    /// Frame counter
     pub f_cnt: u16,
+    /// Frame options
     pub f_opts: Vec<u8, 15>,
 }
 
 impl FHDR {
-    fn serialize(&self) -> Vec<u8, 64> {
+    /// Serialize frame header to bytes
+    pub fn serialize(&self) -> Vec<u8, 16> {
         let mut buffer = Vec::new();
-        buffer.extend_from_slice(&self.dev_addr).unwrap();
+        let addr_bytes = self.dev_addr.as_bytes();
+        buffer.extend_from_slice(addr_bytes).unwrap();
         buffer.push(self.f_ctrl.to_byte()).unwrap();
         buffer.extend_from_slice(&self.f_cnt.to_le_bytes()).unwrap();
         buffer.extend_from_slice(&self.f_opts).unwrap();
@@ -82,20 +132,7 @@ impl FHDR {
     }
 }
 
-/// MAC layer error
-#[derive(Debug)]
-pub enum MacError<E> {
-    /// Radio error
-    Radio(E),
-    /// Invalid MIC
-    InvalidMic,
-    /// Buffer too small
-    BufferTooSmall,
-    /// Invalid frame
-    InvalidFrame,
-}
-
-/// MAC layer state
+/// MAC layer
 pub struct MacLayer<R: Radio, REG: Region> {
     /// PHY layer
     phy: PhyLayer<R>,
@@ -103,78 +140,74 @@ pub struct MacLayer<R: Radio, REG: Region> {
     region: REG,
     /// Session state
     session: SessionState,
+    /// MAC commands to be sent
+    pending_commands: Vec<MacCommand, MAX_MAC_COMMANDS>,
 }
 
 impl<R: Radio, REG: Region> MacLayer<R, REG> {
-    /// Create a new MAC layer
+    /// Create new MAC layer
     pub fn new(radio: R, region: REG, session: SessionState) -> Self {
         Self {
-            phy: PhyLayer::new(radio, PhyConfig::default()),
+            phy: PhyLayer::new(radio),
             region,
             session,
+            pending_commands: Vec::new(),
         }
     }
 
-    /// Initialize the MAC layer
-    pub fn init(&mut self) -> Result<(), MacError<R::Error>> {
-        self.phy.init().map_err(MacError::Radio)
+    /// Get radio reference
+    pub fn get_radio(&self) -> &R {
+        &self.phy.radio
+    }
+
+    /// Get radio mutable reference
+    pub fn get_radio_mut(&mut self) -> &mut R {
+        &mut self.phy.radio
+    }
+
+    /// Get device address
+    pub fn get_device_address(&self) -> Option<DevAddr> {
+        Some(self.session.dev_addr)
+    }
+
+    /// Set RX configuration
+    pub fn set_rx_config(
+        &mut self,
+        frequency: u32,
+        data_rate: DataRate,
+        timeout_ms: u32,
+    ) -> Result<(), MacError<R::Error>> {
+        self.phy
+            .configure_rx::<REG>(frequency, data_rate, timeout_ms)
+            .map_err(MacError::Radio)
+    }
+
+    /// Get RX1 parameters
+    pub fn get_rx1_params(&mut self) -> Result<(u32, DataRate), MacError<R::Error>> {
+        let channel = self
+            .region
+            .get_next_channel()
+            .ok_or(MacError::InvalidChannel)?;
+        Ok(self.region.rx1_window(&channel))
     }
 
     /// Send unconfirmed data
-    pub fn send_unconfirmed(
-        &mut self,
-        f_port: u8,
-        data: &[u8],
-    ) -> Result<(), MacError<R::Error>> {
-        self.send_data(MType::UnconfirmedDataUp, f_port, data)
-    }
-
-    /// Send confirmed data
-    pub fn send_confirmed(
-        &mut self,
-        f_port: u8,
-        data: &[u8],
-    ) -> Result<(), MacError<R::Error>> {
-        self.send_data(MType::ConfirmedDataUp, f_port, data)
-    }
-
-    /// Send data frame
-    fn send_data(
-        &mut self,
-        mtype: MType,
-        f_port: u8,
-        data: &[u8],
-    ) -> Result<(), MacError<R::Error>> {
-        // Select next channel using frequency hopping
-        let channel = self.region
-            .get_next_channel()
-            .ok_or(MacError::InvalidFrame)?;
-
-        // Configure radio for selected channel
-        self.phy
-            .configure_tx::<REG>(channel, self.region.data_rate())
-            .map_err(MacError::Radio)?;
-
-        // Prepare frame
-        let mut buffer = Vec::new();
+    pub fn send_unconfirmed(&mut self, f_port: u8, data: &[u8]) -> Result<(), MacError<R::Error>> {
+        let mut buffer: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
 
         // Add MAC header
-        buffer.push(mtype as u8).map_err(|_| MacError::BufferTooSmall)?;
+        buffer.push(0x40).map_err(|_| MacError::BufferTooSmall)?; // Unconfirmed Data Up
 
         // Add frame header
         let fhdr = FHDR {
             dev_addr: self.session.dev_addr,
-            f_ctrl: FCtrl {
-                adr: false,
-                adr_ack_req: false,
-                ack: false,
-                f_pending: false,
-                f_opts_len: 0,
-            },
+            f_ctrl: FCtrl::new(),
             f_cnt: self.session.fcnt_up as u16,
             f_opts: Vec::new(),
         };
-        buffer.extend_from_slice(&fhdr.serialize()).map_err(|_| MacError::BufferTooSmall)?;
+        buffer
+            .extend_from_slice(&fhdr.serialize())
+            .map_err(|_| MacError::BufferTooSmall)?;
 
         // Add port
         buffer.push(f_port).map_err(|_| MacError::BufferTooSmall)?;
@@ -187,7 +220,9 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
             Direction::Up,
             data,
         );
-        buffer.extend_from_slice(&encrypted).map_err(|_| MacError::BufferTooSmall)?;
+        buffer
+            .extend_from_slice(&encrypted)
+            .map_err(|_| MacError::BufferTooSmall)?;
 
         // Add MIC
         let mic = crypto::compute_mic(
@@ -197,71 +232,86 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
             self.session.fcnt_up,
             Direction::Up,
         );
-        buffer.extend_from_slice(&mic).map_err(|_| MacError::BufferTooSmall)?;
+        buffer
+            .extend_from_slice(&mic)
+            .map_err(|_| MacError::BufferTooSmall)?;
 
         // Transmit
         self.phy.transmit(&buffer).map_err(MacError::Radio)?;
 
         // Increment frame counter
-        self.session.increment_fcnt_up();
+        self.session.fcnt_up = self.session.fcnt_up.wrapping_add(1);
 
         Ok(())
     }
 
-    /// Send join request
-    pub fn join_request(
-        &mut self,
-        dev_eui: EUI64,
-        app_eui: EUI64,
-        app_key: AESKey,
-    ) -> Result<(), MacError<R::Error>> {
-        // Select next join channel using frequency hopping
-        let channel = self.region
-            .get_next_join_channel()
-            .ok_or(MacError::InvalidFrame)?;
-
-        // Configure radio for selected channel
-        self.phy
-            .configure_tx::<REG>(channel, self.region.data_rate())
-            .map_err(MacError::Radio)?;
-
-        // Prepare frame
-        let mut buffer = Vec::new();
+    /// Send confirmed data
+    pub fn send_confirmed(&mut self, f_port: u8, data: &[u8]) -> Result<(), MacError<R::Error>> {
+        let mut buffer: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
 
         // Add MAC header
-        buffer.push(MType::JoinRequest as u8).map_err(|_| MacError::BufferTooSmall)?;
+        buffer.push(0x80).map_err(|_| MacError::BufferTooSmall)?; // Confirmed Data Up
 
-        // Add AppEUI
-        buffer.extend_from_slice(&app_eui).map_err(|_| MacError::BufferTooSmall)?;
+        // Add frame header
+        let fhdr = FHDR {
+            dev_addr: self.session.dev_addr,
+            f_ctrl: FCtrl::new(),
+            f_cnt: self.session.fcnt_up as u16,
+            f_opts: Vec::new(),
+        };
+        buffer
+            .extend_from_slice(&fhdr.serialize())
+            .map_err(|_| MacError::BufferTooSmall)?;
 
-        // Add DevEUI
-        buffer.extend_from_slice(&dev_eui).map_err(|_| MacError::BufferTooSmall)?;
+        // Add port
+        buffer.push(f_port).map_err(|_| MacError::BufferTooSmall)?;
 
-        // Add DevNonce
-        buffer.extend_from_slice(&self.session.dev_nonce.to_le_bytes()).map_err(|_| MacError::BufferTooSmall)?;
+        // Add encrypted payload
+        let encrypted = crypto::encrypt_payload(
+            &self.session.app_skey,
+            self.session.dev_addr,
+            self.session.fcnt_up,
+            Direction::Up,
+            data,
+        );
+        buffer
+            .extend_from_slice(&encrypted)
+            .map_err(|_| MacError::BufferTooSmall)?;
 
         // Add MIC
-        let mic = crypto::compute_join_request_mic(&app_key, &buffer);
-        buffer.extend_from_slice(&mic).map_err(|_| MacError::BufferTooSmall)?;
+        let mic = crypto::compute_mic(
+            &self.session.nwk_skey,
+            &buffer,
+            self.session.dev_addr,
+            self.session.fcnt_up,
+            Direction::Up,
+        );
+        buffer
+            .extend_from_slice(&mic)
+            .map_err(|_| MacError::BufferTooSmall)?;
 
         // Transmit
         self.phy.transmit(&buffer).map_err(MacError::Radio)?;
 
+        // Increment frame counter
+        self.session.fcnt_up = self.session.fcnt_up.wrapping_add(1);
+
         Ok(())
     }
 
-    /// Receive data
-    pub fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, MacError<R::Error>> {
-        let len = self.phy.receive(buffer).map_err(MacError::Radio)?;
-
-        if len < MIC_SIZE + 1 {
-            return Err(MacError::InvalidFrame);
+    /// Decrypt payload
+    pub fn decrypt_payload(
+        &self,
+        data: &[u8],
+    ) -> Result<Vec<u8, MAX_MAC_PAYLOAD>, MacError<R::Error>> {
+        if data.len() < MIC_SIZE {
+            return Err(MacError::InvalidLength);
         }
 
+        let payload = &data[..data.len() - MIC_SIZE];
+        let mic = &data[data.len() - MIC_SIZE..];
+
         // Verify MIC
-        let payload = &buffer[..len - MIC_SIZE];
-        let mic = &buffer[len - MIC_SIZE..len];
-        
         let computed_mic = crypto::compute_mic(
             &self.session.nwk_skey,
             payload,
@@ -269,249 +319,228 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
             self.session.fcnt_down,
             Direction::Down,
         );
-
         if mic != computed_mic {
             return Err(MacError::InvalidMic);
         }
 
-        // Parse frame
-        let mtype = buffer[0] & 0xE0;
-        match mtype {
-            x if x == MType::UnconfirmedDataDown as u8 => {
-                self.handle_data_down(buffer, len - MIC_SIZE)?;
-            }
-            x if x == MType::ConfirmedDataDown as u8 => {
-                self.handle_data_down(buffer, len - MIC_SIZE)?;
-                // TODO: Send ACK
-            }
-            x if x == MType::JoinAccept as u8 => {
-                self.handle_join_accept(buffer, len - MIC_SIZE)?;
-            }
-            _ => return Err(MacError::InvalidFrame),
-        }
+        // Decrypt payload
+        let decrypted = crypto::encrypt_payload(
+            &self.session.app_skey,
+            self.session.dev_addr,
+            self.session.fcnt_down,
+            Direction::Down,
+            payload,
+        );
 
-        Ok(len)
+        let mut result = Vec::new();
+        result
+            .extend_from_slice(&decrypted)
+            .map_err(|_| MacError::BufferTooSmall)?;
+        Ok(result)
     }
 
-    /// Handle downlink data frame
-    fn handle_data_down(&mut self, buffer: &[u8], len: usize) -> Result<(), MacError<R::Error>> {
-        // TODO: Parse FHDR, decrypt payload, handle MAC commands
-        self.session.increment_fcnt_down();
-        Ok(())
-    }
-
-    /// Handle join accept
-    fn handle_join_accept(&mut self, buffer: &[u8], len: usize) -> Result<(), MacError<R::Error>> {
-        // TODO: Decrypt join accept, extract parameters, derive session keys
-        Ok(())
-    }
-
-    /// Configure for TTN US915
-    pub fn configure_for_ttn(&mut self) -> Result<(), MacError<R::Error>> {
-        if let Some(us915) = (&mut self.region as *mut REG).cast::<US915>() {
-            unsafe {
-                (*us915).configure_ttn_us915();
+    /// Extract MAC commands
+    pub fn extract_mac_commands(
+        &self,
+        payload: &[u8],
+    ) -> Option<Vec<MacCommand, MAX_MAC_COMMANDS>> {
+        let mut commands = Vec::new();
+        let mut i = 0;
+        while i < payload.len() {
+            let cid = payload[i];
+            i += 1;
+            if let Some(cmd) = MacCommand::from_bytes(cid, &payload[i..]) {
+                commands.push(cmd.clone()).ok()?;
+                i += cmd.len();
+            } else {
+                return None;
             }
         }
-        Ok(())
-    }
-}
-
-// Add to the existing MacCommand enum
-#[derive(Debug, Clone)]
-pub enum MacCommand {
-    // ... existing commands ...
-
-    /// PingSlotInfoReq - Device requests ping slot parameters
-    PingSlotInfoReq {
-        periodicity: u8,
-    },
-    /// PingSlotInfoAns - Network confirms ping slot parameters
-    PingSlotInfoAns,
-    
-    /// BeaconTimingReq - Device requests next beacon timing
-    BeaconTimingReq,
-    /// BeaconTimingAns - Network provides next beacon timing
-    BeaconTimingAns {
-        delay: u16,
-        channel: u8,
-    },
-    
-    /// BeaconFreqReq - Network configures beacon frequency
-    BeaconFreqReq {
-        frequency: u32,
-    },
-    /// BeaconFreqAns - Device confirms beacon frequency
-    BeaconFreqAns {
-        status: u8,
-    },
-}
-
-impl MacCommand {
-    // Add to the existing from_bytes function
-    pub fn from_bytes(cid: u8, payload: &[u8]) -> Result<Self, MacError> {
-        match cid {
-            // ... existing command parsing ...
-
-            // Class B MAC Commands
-            0x10 => {
-                // PingSlotInfoReq
-                if payload.len() != 1 {
-                    return Err(MacError::InvalidLength);
-                }
-                Ok(MacCommand::PingSlotInfoReq {
-                    periodicity: payload[0] & 0x07,
-                })
-            }
-            0x11 => {
-                // PingSlotInfoAns
-                Ok(MacCommand::PingSlotInfoAns)
-            }
-            0x12 => {
-                // BeaconTimingReq
-                Ok(MacCommand::BeaconTimingReq)
-            }
-            0x13 => {
-                // BeaconTimingAns
-                if payload.len() != 3 {
-                    return Err(MacError::InvalidLength);
-                }
-                let delay = u16::from_le_bytes([payload[0], payload[1]]);
-                Ok(MacCommand::BeaconTimingAns {
-                    delay,
-                    channel: payload[2],
-                })
-            }
-            0x14 => {
-                // BeaconFreqReq
-                if payload.len() != 3 {
-                    return Err(MacError::InvalidLength);
-                }
-                let freq = u32::from_le_bytes([payload[0], payload[1], payload[2], 0]);
-                Ok(MacCommand::BeaconFreqReq {
-                    frequency: freq * 100,
-                })
-            }
-            0x15 => {
-                // BeaconFreqAns
-                if payload.len() != 1 {
-                    return Err(MacError::InvalidLength);
-                }
-                Ok(MacCommand::BeaconFreqAns {
-                    status: payload[0],
-                })
-            }
-            _ => Err(MacError::UnknownCommand),
-        }
+        Some(commands)
     }
 
-    // Add to the existing to_bytes function
-    pub fn to_bytes(&self) -> (u8, Vec<u8, 16>) {
-        match self {
-            // ... existing command serialization ...
-
-            // Class B MAC Commands
-            MacCommand::PingSlotInfoReq { periodicity } => {
-                let mut payload = Vec::new();
-                payload.extend_from_slice(&[periodicity & 0x07]);
-                (0x10, payload)
-            }
-            MacCommand::PingSlotInfoAns => (0x11, Vec::new()),
-            MacCommand::BeaconTimingReq => (0x12, Vec::new()),
-            MacCommand::BeaconTimingAns { delay, channel } => {
-                let mut payload = Vec::new();
-                payload.extend_from_slice(&delay.to_le_bytes());
-                payload.extend_from_slice(&[*channel]);
-                (0x13, payload)
-            }
-            MacCommand::BeaconFreqReq { frequency } => {
-                let mut payload = Vec::new();
-                let freq_bytes = (*frequency / 100).to_le_bytes();
-                payload.extend_from_slice(&freq_bytes[0..3]);
-                (0x14, payload)
-            }
-            MacCommand::BeaconFreqAns { status } => {
-                let mut payload = Vec::new();
-                payload.extend_from_slice(&[*status]);
-                (0x15, payload)
-            }
-        }
-    }
-}
-
-impl<R: Radio, REG: Region> MacLayer<R, REG> {
-    // Add Class B command handling methods
-    
-    /// Handle PingSlotInfoReq command
-    pub fn handle_ping_slot_info_req(&mut self, periodicity: u8) -> Result<(), MacError<R::Error>> {
-        // Validate periodicity (0-7)
-        if periodicity > 7 {
-            return Err(MacError::InvalidValue);
-        }
-
-        // Store ping slot parameters
-        // TODO: Update device ping slot configuration
-
-        // Send answer
-        self.queue_mac_command(MacCommand::PingSlotInfoAns);
-        
-        Ok(())
+    /// Queue MAC command
+    pub fn queue_mac_command(&mut self, command: MacCommand) -> Result<(), MacError<R::Error>> {
+        self.pending_commands
+            .push(command)
+            .map_err(|_| MacError::BufferTooSmall)
     }
 
-    /// Handle BeaconTimingReq command
-    pub fn handle_beacon_timing_req(&mut self) -> Result<(), MacError<R::Error>> {
-        // Calculate time to next beacon
-        // TODO: Calculate actual beacon timing
-
-        // Send answer with next beacon timing
-        self.queue_mac_command(MacCommand::BeaconTimingAns {
-            delay: 0, // TODO: Calculate actual delay
-            channel: 0, // TODO: Use actual beacon channel
-        });
-        
-        Ok(())
+    /// Increment frame counter down
+    pub fn increment_frame_counter_down(&mut self) {
+        self.session.fcnt_down = self.session.fcnt_down.wrapping_add(1);
     }
 
-    /// Handle BeaconFreqReq command
-    pub fn handle_beacon_freq_req(&mut self, frequency: u32) -> Result<(), MacError<R::Error>> {
-        // Validate frequency
-        if !self.region.is_valid_frequency(frequency) {
-            // Reject invalid frequency
-            self.queue_mac_command(MacCommand::BeaconFreqAns { status: 1 });
-            return Ok(());
-        }
-
-        // Update beacon frequency
-        // TODO: Store and apply new beacon frequency
-
-        // Accept new frequency
-        self.queue_mac_command(MacCommand::BeaconFreqAns { status: 0 });
-        
-        Ok(())
+    /// Receive data
+    pub fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, MacError<R::Error>> {
+        self.phy.receive(buffer).map_err(MacError::Radio)
     }
 
-    /// Process received MAC command
+    /// Process MAC command
     pub fn process_mac_command(&mut self, command: MacCommand) -> Result<(), MacError<R::Error>> {
         match command {
-            // ... existing command handling ...
-
-            // Class B MAC Commands
-            MacCommand::PingSlotInfoReq { periodicity } => {
-                self.handle_ping_slot_info_req(periodicity)?;
+            MacCommand::LinkCheckReq => {
+                // TODO: Implement link check request
+                Ok(())
             }
-            MacCommand::BeaconTimingReq => {
-                self.handle_beacon_timing_req()?;
+            MacCommand::LinkCheckAns { margin: _, gateway_count: _ } => {
+                // TODO: Handle link check answer
+                Ok(())
             }
-            MacCommand::BeaconFreqReq { frequency } => {
-                self.handle_beacon_freq_req(frequency)?;
+            MacCommand::LinkADRReq { data_rate: _, tx_power: _, ch_mask: _, ch_mask_cntl: _, nb_trans: _ } => {
+                // TODO: Handle link ADR request
+                Ok(())
             }
-            MacCommand::PingSlotInfoAns |
-            MacCommand::BeaconTimingAns { .. } |
-            MacCommand::BeaconFreqAns { .. } => {
-                // These are responses to our requests, handle accordingly
-                // TODO: Update device state based on responses
+            MacCommand::LinkADRAns { power_ack: _, data_rate_ack: _, channel_mask_ack: _ } => {
+                // TODO: Handle link ADR answer
+                Ok(())
+            }
+            MacCommand::DutyCycleReq { max_duty_cycle: _ } => {
+                // TODO: Handle duty cycle request
+                Ok(())
+            }
+            MacCommand::DutyCycleAns => {
+                // TODO: Handle duty cycle answer
+                Ok(())
+            }
+            MacCommand::RXParamSetupReq { rx1_dr_offset: _, rx2_data_rate: _, freq: _ } => {
+                // TODO: Handle RX param setup request
+                Ok(())
+            }
+            MacCommand::RXParamSetupAns { rx1_dr_offset_ack: _, rx2_data_rate_ack: _, channel_ack: _ } => {
+                // TODO: Handle RX param setup answer
+                Ok(())
+            }
+            MacCommand::DevStatusReq => {
+                // TODO: Handle device status request
+                Ok(())
+            }
+            MacCommand::DevStatusAns { battery: _, margin: _ } => {
+                // TODO: Handle device status answer
+                Ok(())
+            }
+            MacCommand::NewChannelReq { ch_index: _, freq: _, min_dr: _, max_dr: _ } => {
+                // TODO: Handle new channel request
+                Ok(())
+            }
+            MacCommand::NewChannelAns { channel_freq_ok: _, data_rate_ok: _ } => {
+                // TODO: Handle new channel answer
+                Ok(())
+            }
+            MacCommand::RXTimingSetupReq { delay: _ } => {
+                // TODO: Handle RX timing setup request
+                Ok(())
+            }
+            MacCommand::RXTimingSetupAns => {
+                // TODO: Handle RX timing setup answer
+                Ok(())
+            }
+            MacCommand::TxParamSetupReq { downlink_dwell_time: _, uplink_dwell_time: _, max_eirp: _ } => {
+                // TODO: Handle TX param setup request
+                Ok(())
+            }
+            MacCommand::TxParamSetupAns => {
+                // TODO: Handle TX param setup answer
+                Ok(())
+            }
+            MacCommand::DlChannelReq { ch_index: _, freq: _ } => {
+                // TODO: Handle downlink channel request
+                Ok(())
+            }
+            MacCommand::DlChannelAns { channel_freq_ok: _, uplink_freq_exists: _ } => {
+                // TODO: Handle downlink channel answer
+                Ok(())
             }
         }
+    }
+
+    /// Join request
+    pub fn join_request(
+        &mut self,
+        _dev_eui: [u8; 8],
+        _app_eui: [u8; 8],
+        _app_key: AESKey,
+    ) -> Result<(), MacError<R::Error>> {
+        // TODO: Implement join request
         Ok(())
     }
-} 
+
+    /// Configure for TTN
+    pub fn configure_for_ttn(&mut self) -> Result<(), MacError<R::Error>> {
+        if let Some(us915) = self.region.as_any_mut().downcast_mut::<US915>() {
+            us915.configure_ttn_us915();
+            Ok(())
+        } else {
+            Err(MacError::InvalidConfig)
+        }
+    }
+
+    /// Get next channel
+    pub fn get_next_channel(&mut self) -> Result<Channel, MacError<R::Error>> {
+        self.region
+            .get_next_channel()
+            .ok_or(MacError::InvalidChannel)
+    }
+
+    /// Get beacon channels
+    pub fn get_beacon_channels(&self) -> Vec<Channel, 8> {
+        self.region.get_beacon_channels()
+    }
+
+    /// Get next beacon channel
+    pub fn get_next_beacon_channel(&mut self) -> Option<Channel> {
+        self.region.get_next_beacon_channel()
+    }
+
+    /// Get uplink frame counter
+    pub fn get_frame_counter_up(&self) -> u32 {
+        self.session.fcnt_up
+    }
+
+    /// Get downlink frame counter
+    pub fn get_frame_counter_down(&self) -> u32 {
+        self.session.fcnt_down
+    }
+
+    fn handle_mac_command(&mut self, command: MacCommand) -> Result<(), MacError<R::Error>> {
+        match command {
+            MacCommand::LinkCheckReq |
+            MacCommand::LinkCheckAns { .. } |
+            MacCommand::LinkADRReq { .. } |
+            MacCommand::LinkADRAns { .. } |
+            MacCommand::DutyCycleReq { .. } |
+            MacCommand::DutyCycleAns |
+            MacCommand::RXParamSetupReq { .. } |
+            MacCommand::RXParamSetupAns { .. } |
+            MacCommand::DevStatusReq |
+            MacCommand::DevStatusAns { .. } |
+            MacCommand::NewChannelAns { .. } |
+            MacCommand::RXTimingSetupAns |
+            MacCommand::TxParamSetupAns |
+            MacCommand::DlChannelAns { .. } => Ok(()),
+
+            MacCommand::NewChannelReq { ch_index, freq, min_dr: _, max_dr: _ } => {
+                // Validate and configure new channel
+                if !self.region.is_valid_frequency(freq) {
+                    return Err(MacError::InvalidFrequency);
+                }
+                if ch_index as usize >= self.region.get_max_channels() {
+                    return Err(MacError::InvalidChannel);
+                }
+                Ok(())
+            },
+            MacCommand::RXTimingSetupReq { delay: _ } => {
+                // TODO: Store RX1 delay for future use
+                Ok(())
+            },
+            MacCommand::TxParamSetupReq { downlink_dwell_time: _, uplink_dwell_time: _, max_eirp: _ } => {
+                // TODO: Store TX parameters for future use
+                Ok(())
+            },
+            MacCommand::DlChannelReq { ch_index: _, freq: _ } => {
+                // TODO: Configure downlink channel
+                Ok(())
+            },
+        }
+    }
+}

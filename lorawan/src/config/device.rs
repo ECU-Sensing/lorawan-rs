@@ -1,74 +1,70 @@
-use heapless::Vec;
+//! Device configuration and session state
+//!
+//! This module provides types for configuring LoRaWAN devices and managing their session state.
+//! It includes:
+//! - Device address handling
+//! - AES key management
+//! - Device configuration for OTAA and ABP activation
+//! - Session state tracking
 
-/// EUI-64 (8 bytes)
-pub type EUI64 = [u8; 8];
+/// Device address (4 bytes)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DevAddr {
+    bytes: [u8; 4],
+}
+
+impl DevAddr {
+    /// Create a new device address from raw bytes
+    pub fn new(bytes: [u8; 4]) -> Self {
+        Self { bytes }
+    }
+
+    /// Get the raw bytes of the device address
+    pub fn as_bytes(&self) -> &[u8; 4] {
+        &self.bytes
+    }
+}
+
 /// AES-128 key (16 bytes)
-pub type AESKey = [u8; 16];
-/// Device Address (4 bytes)
-pub type DevAddr = [u8; 4];
-
-/// LoRaWAN device class
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum DeviceClass {
-    /// Class A: Uplink followed by two receive windows
-    A,
-    /// Class B: Scheduled receive slots (beaconing)
-    B,
-    /// Class C: Continuously listening except when transmitting
-    C,
+#[derive(Debug, Clone)]
+pub struct AESKey {
+    bytes: [u8; 16],
 }
 
-/// Device activation state
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ActivationState {
-    /// Device is not activated
-    Idle,
-    /// Device is activated through OTAA
-    OTAAActivated,
-    /// Device is activated through ABP
-    ABPActivated,
+impl AESKey {
+    /// Create a new AES key from raw bytes
+    pub fn new(bytes: [u8; 16]) -> Self {
+        Self { bytes }
+    }
+
+    /// Get the raw bytes of the key
+    pub fn as_bytes(&self) -> &[u8; 16] {
+        &self.bytes
+    }
 }
 
-/// Device configuration for both OTAA and ABP activation
+/// 64-bit Extended Unique Identifier (EUI)
+pub type EUI64 = [u8; 8];
+
+/// Device configuration
 #[derive(Debug, Clone)]
 pub struct DeviceConfig {
     /// Device EUI (unique device identifier)
     pub dev_eui: EUI64,
-    /// Application EUI
+    /// Application EUI (unique application identifier)
     pub app_eui: EUI64,
-    /// Application key (used for OTAA)
+    /// Application key (root key for OTAA)
     pub app_key: AESKey,
-    /// Device address (used for ABP or assigned during OTAA)
+    /// Device address (assigned during activation)
     pub dev_addr: Option<DevAddr>,
-    /// Network session key (used for ABP or derived during OTAA)
+    /// Network session key (derived during activation)
     pub nwk_skey: Option<AESKey>,
-    /// Application session key (used for ABP or derived during OTAA)
+    /// Application session key (derived during activation)
     pub app_skey: Option<AESKey>,
 }
 
-/// Session state for an activated device
-#[derive(Debug, Clone)]
-pub struct SessionState {
-    /// Current activation state
-    pub activation_state: ActivationState,
-    /// Current device class
-    pub device_class: DeviceClass,
-    /// Device address (assigned during activation)
-    pub dev_addr: DevAddr,
-    /// Network session key
-    pub nwk_skey: AESKey,
-    /// Application session key
-    pub app_skey: AESKey,
-    /// Uplink frame counter
-    pub fcnt_up: u32,
-    /// Downlink frame counter
-    pub fcnt_down: u32,
-    /// Last used device nonce (for OTAA)
-    pub dev_nonce: u16,
-}
-
 impl DeviceConfig {
-    /// Create a new OTAA device configuration
+    /// Create a new device configuration for OTAA activation
     pub fn new_otaa(dev_eui: EUI64, app_eui: EUI64, app_key: AESKey) -> Self {
         Self {
             dev_eui,
@@ -80,7 +76,7 @@ impl DeviceConfig {
         }
     }
 
-    /// Create a new ABP device configuration
+    /// Create a new device configuration for ABP activation
     pub fn new_abp(
         dev_eui: EUI64,
         app_eui: EUI64,
@@ -91,7 +87,7 @@ impl DeviceConfig {
         Self {
             dev_eui,
             app_eui,
-            app_key: [0; 16], // Not used in ABP
+            app_key: AESKey::new([0; 16]), // Not used in ABP
             dev_addr: Some(dev_addr),
             nwk_skey: Some(nwk_skey),
             app_skey: Some(app_skey),
@@ -99,47 +95,69 @@ impl DeviceConfig {
     }
 }
 
+/// Session state
+#[derive(Debug, Clone)]
+pub struct SessionState {
+    /// Device address
+    pub dev_addr: DevAddr,
+    /// Network session key
+    pub nwk_skey: AESKey,
+    /// Application session key
+    pub app_skey: AESKey,
+    /// Uplink frame counter
+    pub fcnt_up: u32,
+    /// Downlink frame counter
+    pub fcnt_down: u32,
+}
+
 impl SessionState {
+    /// Create a new empty session state with default values
+    pub fn new() -> Self {
+        Self {
+            dev_addr: DevAddr::new([0; 4]),
+            nwk_skey: AESKey::new([0; 16]),
+            app_skey: AESKey::new([0; 16]),
+            fcnt_up: 0,
+            fcnt_down: 0,
+        }
+    }
+
     /// Create a new session state for ABP activation
     pub fn new_abp(dev_addr: DevAddr, nwk_skey: AESKey, app_skey: AESKey) -> Self {
         Self {
-            activation_state: ActivationState::ABPActivated,
-            device_class: DeviceClass::A, // Default to Class A
             dev_addr,
             nwk_skey,
             app_skey,
             fcnt_up: 0,
             fcnt_down: 0,
-            dev_nonce: 0,
         }
     }
 
-    /// Create a new session state for OTAA activation
-    pub fn new_otaa(dev_addr: DevAddr, nwk_skey: AESKey, app_skey: AESKey) -> Self {
+    /// Create a new session state from OTAA join response
+    pub fn from_join_accept(
+        dev_addr: DevAddr,
+        nwk_skey: AESKey,
+        app_skey: AESKey,
+    ) -> Self {
         Self {
-            activation_state: ActivationState::OTAAActivated,
-            device_class: DeviceClass::A, // Default to Class A
             dev_addr,
             nwk_skey,
             app_skey,
             fcnt_up: 0,
             fcnt_down: 0,
-            dev_nonce: 0,
         }
     }
 
-    /// Increment the uplink frame counter
-    pub fn increment_fcnt_up(&mut self) {
-        self.fcnt_up = self.fcnt_up.wrapping_add(1);
+    /// Reset frame counters
+    pub fn reset_counters(&mut self) {
+        self.fcnt_up = 0;
+        self.fcnt_down = 0;
     }
 
-    /// Increment the downlink frame counter
-    pub fn increment_fcnt_down(&mut self) {
-        self.fcnt_down = self.fcnt_down.wrapping_add(1);
+    /// Check if session is active (has valid keys)
+    pub fn is_active(&self) -> bool {
+        // Check if keys are non-zero
+        !self.nwk_skey.as_bytes().iter().all(|&x| x == 0) &&
+        !self.app_skey.as_bytes().iter().all(|&x| x == 0)
     }
-
-    /// Set the device class
-    pub fn set_device_class(&mut self, class: DeviceClass) {
-        self.device_class = class;
-    }
-} 
+}

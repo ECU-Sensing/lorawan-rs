@@ -17,36 +17,30 @@ use hal::{
 };
 
 use lorawan::{
+    class::OperatingMode,
     config::device::DeviceConfig,
     device::LoRaWANDevice,
-    class::OperatingMode,
     lorawan::{
-        region::US915,
         commands::{CommandHandler, DownlinkCommand},
+        region::US915,
     },
     radio::sx127x::SX127x,
 };
 
 // Type aliases for SPI and GPIO configurations
 type SpiPins = (
-    PA5<Alternate<5>>,  // SCK
-    PA6<Alternate<5>>,  // MISO
-    PA7<Alternate<5>>,  // MOSI
+    PA5<Alternate<5>>, // SCK
+    PA6<Alternate<5>>, // MISO
+    PA7<Alternate<5>>, // MOSI
 );
 
-type Spi = Spi1<
-    (
-        PA5<Alternate<5>>,
-        PA6<Alternate<5>>,
-        PA7<Alternate<5>>,
-    )
->;
+type Spi = Spi1<(PA5<Alternate<5>>, PA6<Alternate<5>>, PA7<Alternate<5>>)>;
 
 type RadioPins = (
-    PB6<Output<PushPull>>,   // CS
-    PC7<Output<PushPull>>,   // RESET
-    PC8<Input>,              // DIO0
-    PC9<Input>,              // DIO1
+    PB6<Output<PushPull>>, // CS
+    PC7<Output<PushPull>>, // RESET
+    PC8<Input>,            // DIO0
+    PC9<Input>,            // DIO1
 );
 
 // Global state for uplink interval
@@ -100,20 +94,17 @@ fn main() -> ! {
     let config = DeviceConfig::new_otaa(
         [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08], // DevEUI
         [0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01], // AppEUI
-        [0x2B, 0x7E, 0x15, 0x16, 0x28, 0xAE, 0xD2, 0xA6,
-         0xAB, 0xF7, 0x15, 0x88, 0x09, 0xCF, 0x4F, 0x3C], // AppKey
+        [
+            0x2B, 0x7E, 0x15, 0x16, 0x28, 0xAE, 0xD2, 0xA6, 0xAB, 0xF7, 0x15, 0x88, 0x09, 0xCF,
+            0x4F, 0x3C,
+        ], // AppKey
     );
 
     // Create region configuration
     let region = US915::new();
 
     // Create LoRaWAN device
-    let mut device = LoRaWANDevice::new(
-        radio,
-        config,
-        region,
-        OperatingMode::ClassA,
-    ).unwrap();
+    let mut device = LoRaWANDevice::new(radio, config, region, OperatingMode::ClassA).unwrap();
 
     // Join network using OTAA
     loop {
@@ -134,7 +125,7 @@ fn main() -> ! {
     loop {
         // Prepare uplink data
         let data = counter.to_be_bytes();
-        
+
         // Send unconfirmed uplink on port 1
         if let Ok(_) = device.send_uplink(1, &data, false) {
             // Process device (handle receive windows)
@@ -170,4 +161,4 @@ fn main() -> ! {
         }
         counter = counter.wrapping_add(1);
     }
-} 
+}

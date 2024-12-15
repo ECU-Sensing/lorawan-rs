@@ -1,34 +1,27 @@
+//! LoRaWAN device class implementations
+//!
+//! This module contains the implementations of the three LoRaWAN device classes:
+//! - Class A: Basic bi-directional communication with two receive windows after each uplink
+//! - Class B: Scheduled receive slots synchronized with network beacon
+//! - Class C: Continuous receive except when transmitting
+
+/// Class A device implementation
 pub mod class_a;
+
+/// Class B device implementation
 pub mod class_b;
+
+/// Class C device implementation
 pub mod class_c;
 
-use core::time::Duration;
-use heapless::Vec;
-
-use crate::lorawan::{
-    mac::MacLayer,
-    region::Region,
-};
-use crate::radio::Radio;
-
-/// Maximum number of scheduled ping slots
-pub const MAX_PING_SLOTS: usize = 16;
-
-/// Beacon timing parameters
-#[derive(Debug, Clone, Copy)]
-pub struct BeaconTiming {
-    /// Time to next beacon in seconds
-    pub time_to_beacon: u32,
-    /// Channel for next beacon
-    pub channel: u32,
-}
+use crate::config::device::AESKey;
 
 /// Device operating mode
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OperatingMode {
-    /// Class A: Two receive windows after each uplink
+    /// Class A: Basic bi-directional communication
     ClassA,
-    /// Class B: Scheduled receive slots using beacons
+    /// Class B: Scheduled receive slots
     ClassB,
     /// Class C: Continuous receive
     ClassC,
@@ -36,7 +29,7 @@ pub enum OperatingMode {
 
 /// Common trait for all device classes
 pub trait DeviceClass {
-    /// Radio error type
+    /// Error type for device operations
     type Error;
 
     /// Get current operating mode
@@ -49,70 +42,54 @@ pub trait DeviceClass {
     fn send_data(&mut self, port: u8, data: &[u8], confirmed: bool) -> Result<(), Self::Error>;
 
     /// Send join request
-    fn send_join_request(&mut self, dev_eui: [u8; 8], app_eui: [u8; 8], app_key: [u8; 16]) -> Result<(), Self::Error>;
+    fn send_join_request(
+        &mut self,
+        dev_eui: [u8; 8],
+        app_eui: [u8; 8],
+        app_key: AESKey,
+    ) -> Result<(), Self::Error>;
 
     /// Receive data
     fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error>;
 }
 
-/// Class B ping slot timing
-#[derive(Debug, Clone, Copy)]
-pub struct PingSlot {
-    /// Absolute time of ping slot in seconds since beacon
-    pub time: u32,
-    /// Duration of ping slot in milliseconds
-    pub duration: u32,
-    /// Channel frequency
+/// RX window configuration
+#[derive(Debug, Clone)]
+pub struct RxConfig {
+    /// RX window frequency in Hz
     pub frequency: u32,
+    /// RX window data rate index
+    pub rx2_data_rate: u8,
+    /// RX window timeout in milliseconds
+    pub rx_timeout: u32,
 }
 
 /// Class B state
 #[derive(Debug)]
 pub struct ClassBState {
-    /// Last received beacon timing
-    pub beacon_timing: Option<BeaconTiming>,
-    /// Scheduled ping slots
-    pub ping_slots: Vec<PingSlot, MAX_PING_SLOTS>,
+    /// Next ping slot time
+    pub next_ping_slot: u32,
+    /// Ping slot period
+    pub ping_period: u32,
+    /// Ping slot frequency
+    pub ping_frequency: u32,
+    /// Ping slot data rate
+    pub ping_data_rate: u8,
 }
 
 impl ClassBState {
     /// Create new Class B state
     pub fn new() -> Self {
         Self {
-            beacon_timing: None,
-            ping_slots: Vec::new(),
+            next_ping_slot: 0,
+            ping_period: 32,
+            ping_frequency: 0,
+            ping_data_rate: 0,
         }
     }
 
-    /// Schedule a new ping slot
-    pub fn schedule_ping_slot(&mut self, slot: PingSlot) -> Result<(), ()> {
-        self.ping_slots.push(slot).map_err(|_| ())
-    }
-
-    /// Clear all ping slots
+    /// Clear ping slots
     pub fn clear_ping_slots(&mut self) {
-        self.ping_slots.clear();
+        self.next_ping_slot = 0;
     }
 }
-
-/// Class C state
-#[derive(Debug)]
-pub struct ClassCState {
-    /// RX2 parameters for continuous receive
-    pub rx2_frequency: u32,
-    pub rx2_data_rate: u8,
-}
-
-impl ClassCState {
-    /// Create new Class C state
-    pub fn new(rx2_frequency: u32, rx2_data_rate: u8) -> Self {
-        Self {
-            rx2_frequency,
-            rx2_data_rate,
-        }
-    }
-}
-
-pub use class_a::ClassA;
-pub use class_b::ClassB;
-pub use class_c::ClassC; 
