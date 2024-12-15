@@ -4,7 +4,7 @@
 //! where each uplink transmission is followed by two short downlink receive windows.
 
 use super::{DeviceClass, OperatingMode};
-use crate::config::device::AESKey;
+use crate::config::device::{AESKey, SessionState};
 use crate::lorawan::mac::{MacError, MacLayer};
 use crate::lorawan::region::Region;
 use crate::radio::traits::Radio;
@@ -22,7 +22,7 @@ impl<R: Radio, REG: Region> ClassA<R, REG> {
     }
 }
 
-impl<R: Radio, REG: Region> DeviceClass for ClassA<R, REG> {
+impl<R: Radio, REG: Region> DeviceClass<R, REG> for ClassA<R, REG> {
     type Error = MacError<R::Error>;
 
     fn operating_mode(&self) -> OperatingMode {
@@ -32,8 +32,27 @@ impl<R: Radio, REG: Region> DeviceClass for ClassA<R, REG> {
     fn process(&mut self) -> Result<(), MacError<R::Error>> {
         // Process RX windows
         let mut buffer = [0u8; 256];
-        if let Ok(_len) = self.mac.receive(&mut buffer) {
-            // TODO: Process received data
+        if let Ok(len) = self.mac.receive(&mut buffer) {
+            // Only process if we received data
+            if len > 0 {
+                // Decrypt and verify payload
+                let payload = self.mac.decrypt_payload(&buffer[..len])?;
+
+                // Extract MAC commands if present (port 0)
+                if let Some(port) = payload.first() {
+                    if *port == 0 {
+                        // Extract and process MAC commands from FRMPayload
+                        if let Some(commands) = self.mac.extract_mac_commands(&payload[1..]) {
+                            for command in commands {
+                                self.mac.process_mac_command(command)?;
+                            }
+                        }
+                    }
+                }
+
+                // Increment frame counter after successful reception
+                self.mac.increment_frame_counter_down();
+            }
         }
         Ok(())
     }
@@ -53,6 +72,14 @@ impl<R: Radio, REG: Region> DeviceClass for ClassA<R, REG> {
         app_key: AESKey,
     ) -> Result<(), MacError<R::Error>> {
         self.mac.join_request(dev_eui, app_eui, app_key)
+    }
+
+    fn get_session_state(&self) -> SessionState {
+        self.mac.get_session_state().clone()
+    }
+
+    fn get_mac_layer(&self) -> &MacLayer<R, REG> {
+        &self.mac
     }
 
     fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, MacError<R::Error>> {

@@ -5,7 +5,7 @@
 //! of increased power consumption.
 
 use super::{DeviceClass, OperatingMode};
-use crate::config::device::AESKey;
+use crate::config::device::{AESKey, SessionState};
 use crate::lorawan::mac::MacError;
 use crate::lorawan::mac::MacLayer;
 use crate::lorawan::region::{DataRate, Region};
@@ -48,7 +48,7 @@ where
     }
 }
 
-impl<R, REG> DeviceClass for ClassC<R, REG>
+impl<R, REG> DeviceClass<R, REG> for ClassC<R, REG>
 where
     R: Radio,
     REG: Region + Debug + Clone,
@@ -65,8 +65,27 @@ where
 
         // Process any received data
         let mut buffer = [0u8; 256];
-        if let Ok(_len) = self.mac.receive(&mut buffer) {
-            // TODO: Process received data
+        if let Ok(len) = self.mac.receive(&mut buffer) {
+            // Only process if we received data
+            if len > 0 {
+                // Decrypt and verify payload
+                let payload = self.mac.decrypt_payload(&buffer[..len])?;
+
+                // Extract MAC commands if present (port 0)
+                if let Some(port) = payload.first() {
+                    if *port == 0 {
+                        // Extract and process MAC commands from FRMPayload
+                        if let Some(commands) = self.mac.extract_mac_commands(&payload[1..]) {
+                            for command in commands {
+                                self.mac.process_mac_command(command)?;
+                            }
+                        }
+                    }
+                }
+
+                // Increment frame counter after successful reception
+                self.mac.increment_frame_counter_down();
+            }
         }
 
         Ok(())
@@ -91,5 +110,13 @@ where
 
     fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, MacError<R::Error>> {
         self.mac.receive(buffer)
+    }
+
+    fn get_session_state(&self) -> SessionState {
+        self.mac.get_session_state().clone()
+    }
+
+    fn get_mac_layer(&self) -> &MacLayer<R, REG> {
+        &self.mac
     }
 }

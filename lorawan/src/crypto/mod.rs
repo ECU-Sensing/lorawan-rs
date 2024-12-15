@@ -42,7 +42,7 @@ pub fn compute_mic(
     fcnt: u32,
     dir: Direction,
 ) -> [u8; MIC_SIZE] {
-    let _cipher = Aes128::new_from_slice(key.as_bytes()).unwrap();
+    let cipher = Aes128::new_from_slice(key.as_bytes()).unwrap();
     let mut b0 = [0u8; BLOCK_SIZE];
     b0[0] = 0x49; // MIC block identifier
     b0[5] = dir as u8;
@@ -50,8 +50,34 @@ pub fn compute_mic(
     b0[10..14].copy_from_slice(&fcnt.to_le_bytes());
     b0[15] = data.len() as u8;
 
-    // TODO: Complete CMAC implementation
-    [0u8; MIC_SIZE]
+    // Initialize CMAC with first block
+    let mut x = b0;
+    cipher.encrypt_block((&mut x).into());
+
+    // Process data blocks
+    let k = (data.len() + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    for i in 0..k {
+        let start = i * BLOCK_SIZE;
+        let end = (start + BLOCK_SIZE).min(data.len());
+        
+        // XOR with previous block
+        for j in 0..end.saturating_sub(start) {
+            x[j] ^= data[start + j];
+        }
+        
+        // If this is the last block and it's not full, pad with zeros (already done by initialization)
+        if i == k - 1 && end.saturating_sub(start) < BLOCK_SIZE {
+            x[end.saturating_sub(start)] ^= 0x80; // Add padding bit
+        }
+        
+        // Encrypt block
+        cipher.encrypt_block((&mut x).into());
+    }
+
+    // Return first 4 bytes as MIC
+    let mut mic = [0u8; MIC_SIZE];
+    mic.copy_from_slice(&x[..MIC_SIZE]);
+    mic
 }
 
 /// Encrypt or decrypt payload using AES-128 in CTR mode
@@ -148,4 +174,53 @@ pub fn derive_session_keys(
     cipher.encrypt_block((&mut app_skey).into());
 
     (AESKey::new(nwk_skey), AESKey::new(app_skey))
+}
+
+/// Compute Message Integrity Code (MIC) for a LoRaWAN join request
+///
+/// # Arguments
+/// * `key` - Application key for MIC computation
+/// * `data` - Join request data to compute MIC for
+pub fn compute_join_request_mic(key: &AESKey, data: &[u8]) -> [u8; MIC_SIZE] {
+    let cipher = Aes128::new_from_slice(key.as_bytes()).unwrap();
+    let mut b0 = [0u8; BLOCK_SIZE];
+    b0[0] = 0x49; // MIC block identifier
+    b0[1..].copy_from_slice(&data[..data.len().min(BLOCK_SIZE - 1)]);
+
+    // Initialize CMAC with first block
+    let mut x = b0;
+    cipher.encrypt_block((&mut x).into());
+
+    // Process remaining data blocks if any
+    if data.len() > BLOCK_SIZE - 1 {
+        let remaining = &data[BLOCK_SIZE - 1..];
+        let k = (remaining.len() + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        
+        for i in 0..k {
+            let start = i * BLOCK_SIZE;
+            let end = (start + BLOCK_SIZE).min(remaining.len());
+            
+            // XOR with previous block
+            for j in 0..end.saturating_sub(start) {
+                x[j] ^= remaining[start + j];
+            }
+            
+            // If this is the last block and it's not full, pad with zeros (already done by initialization)
+            if i == k - 1 && end.saturating_sub(start) < BLOCK_SIZE {
+                x[end.saturating_sub(start)] ^= 0x80; // Add padding bit
+            }
+            
+            // Encrypt block
+            cipher.encrypt_block((&mut x).into());
+        }
+    } else {
+        // If all data fit in first block, just add padding
+        x[data.len()] ^= 0x80;
+        cipher.encrypt_block((&mut x).into());
+    }
+
+    // Return first 4 bytes as MIC
+    let mut mic = [0u8; MIC_SIZE];
+    mic.copy_from_slice(&x[..MIC_SIZE]);
+    mic
 }

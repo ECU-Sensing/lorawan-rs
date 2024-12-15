@@ -160,9 +160,14 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
         &self.phy.radio
     }
 
-    /// Get radio mutable reference
-    pub fn get_radio_mut(&mut self) -> &mut R {
-        &mut self.phy.radio
+    /// Get region reference
+    pub fn get_region(&self) -> &REG {
+        &self.region
+    }
+
+    /// Get session state reference
+    pub fn get_session_state(&self) -> &SessionState {
+        &self.session
     }
 
     /// Get device address
@@ -607,11 +612,58 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
     /// Join request
     pub fn join_request(
         &mut self,
-        _dev_eui: [u8; 8],
-        _app_eui: [u8; 8],
-        _app_key: AESKey,
+        dev_eui: [u8; 8],
+        app_eui: [u8; 8],
+        app_key: AESKey,
     ) -> Result<(), MacError<R::Error>> {
-        // TODO: Implement join request
+        let mut buffer: Vec<u8, MAX_FRAME_SIZE> = Vec::new();
+
+        // Add MAC header (Join Request)
+        buffer.push(0x00).map_err(|_| MacError::BufferTooSmall)?;
+
+        // Add AppEUI (Little Endian)
+        buffer.extend_from_slice(&app_eui).map_err(|_| MacError::BufferTooSmall)?;
+
+        // Add DevEUI (Little Endian)
+        buffer.extend_from_slice(&dev_eui).map_err(|_| MacError::BufferTooSmall)?;
+
+        // Generate random DevNonce
+        let dev_nonce = {
+            let mut nonce = [0u8; 2];
+            // Use last channel as entropy source
+            let entropy = self.region.get_next_channel()
+                .map(|c| c.frequency)
+                .unwrap_or(0);
+            nonce[0] = (entropy & 0xFF) as u8;
+            nonce[1] = ((entropy >> 8) & 0xFF) as u8;
+            nonce
+        };
+
+        // Add DevNonce
+        buffer.extend_from_slice(&dev_nonce).map_err(|_| MacError::BufferTooSmall)?;
+
+        // Calculate and add MIC
+        let mic = crypto::compute_join_request_mic(&app_key, &buffer);
+        buffer.extend_from_slice(&mic).map_err(|_| MacError::BufferTooSmall)?;
+
+        // Get next channel for transmission
+        let channel = self.region.get_next_channel()
+            .ok_or(MacError::InvalidChannel)?;
+
+        // Configure radio for transmission
+        self.phy.configure_tx::<REG>(&channel, DataRate::SF7BW125)?;
+
+        // Transmit join request
+        self.phy.transmit(&buffer)?;
+
+        // Configure RX1 window for join accept
+        let (rx1_freq, rx1_dr) = self.region.rx1_window(&channel);
+        self.phy.configure_rx::<REG>(
+            rx1_freq,
+            rx1_dr,
+            self.region.join_accept_delay1(),
+        )?;
+
         Ok(())
     }
 
@@ -679,17 +731,56 @@ impl<R: Radio, REG: Region> MacLayer<R, REG> {
                 }
                 Ok(())
             },
-            MacCommand::RXTimingSetupReq { delay: _ } => {
-                // TODO: Store RX1 delay for future use
-                Ok(())
+            MacCommand::RXTimingSetupReq { delay } => {
+                // RX1 delay is in seconds, 0 means 1 second
+                let rx1_delay = if delay == 0 { 1 } else { delay as u32 };
+                
+                // Configure PHY layer with new timing
+                self.phy.config.timing.rx1_delay = rx1_delay;
+                self.phy.config.timing.rx2_delay = rx1_delay + 1;
+
+                // Send acknowledgment
+                self.queue_mac_command(MacCommand::RXTimingSetupAns)
             },
-            MacCommand::TxParamSetupReq { downlink_dwell_time: _, uplink_dwell_time: _, max_eirp: _ } => {
-                // TODO: Store TX parameters for future use
-                Ok(())
+            MacCommand::TxParamSetupReq { downlink_dwell_time, uplink_dwell_time, max_eirp } => {
+                // Store dwell time settings
+                // These affect the maximum payload size and time-on-air
+                let _dl_dwell = downlink_dwell_time;
+                let _ul_dwell = uplink_dwell_time;
+
+                // Convert max_eirp to dBm: 2 dBm steps starting from 8 dBm
+                let eirp_dbm = 8 + (2 * max_eirp as u32);
+                if eirp_dbm > 36 {
+                    return Err(MacError::InvalidValue);
+                }
+
+                // Configure radio with new TX power
+                self.phy.radio.set_tx_power(eirp_dbm as i8)?;
+
+                // Send acknowledgment
+                self.queue_mac_command(MacCommand::TxParamSetupAns)
             },
-            MacCommand::DlChannelReq { ch_index: _, freq: _ } => {
-                // TODO: Configure downlink channel
-                Ok(())
+            MacCommand::DlChannelReq { ch_index, freq } => {
+                let mut channel_freq_ok = false;
+                let mut uplink_freq_exists = false;
+
+                // Validate frequency
+                if self.region.is_valid_frequency(freq) {
+                    channel_freq_ok = true;
+                }
+
+                // Check if uplink frequency exists for this channel
+                if let Some(channel) = self.region.get_channel(ch_index) {
+                    if channel.frequency > 0 {
+                        uplink_freq_exists = true;
+                    }
+                }
+
+                // Queue acknowledgment
+                self.queue_mac_command(MacCommand::DlChannelAns {
+                    channel_freq_ok,
+                    uplink_freq_exists,
+                })
             },
         }
     }

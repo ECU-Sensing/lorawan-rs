@@ -160,4 +160,9 @@ impl SessionState {
         !self.nwk_skey.as_bytes().iter().all(|&x| x == 0) &&
         !self.app_skey.as_bytes().iter().all(|&x| x == 0)
     }
+
+    /// Check if device is joined to network
+    pub fn is_joined(&self) -> bool {
+        !self.dev_addr.as_bytes().iter().all(|&x| x == 0) && self.is_active()
+    }
 }

@@ -6,7 +6,7 @@
 use core::time::Duration;
 
 use super::{ClassBState, DeviceClass, OperatingMode};
-use crate::config::device::AESKey;
+use crate::config::device::{AESKey, SessionState};
 use crate::lorawan::mac::{MacError, MacLayer};
 use crate::lorawan::region::Region;
 use crate::radio::traits::Radio;
@@ -220,7 +220,7 @@ impl<R: Radio, REG: Region> ClassB<R, REG> {
     }
 }
 
-impl<R: Radio, REG: Region> DeviceClass for ClassB<R, REG> {
+impl<R: Radio, REG: Region> DeviceClass<R, REG> for ClassB<R, REG> {
     type Error = MacError<R::Error>;
 
     fn operating_mode(&self) -> OperatingMode {
@@ -268,5 +268,13 @@ impl<R: Radio, REG: Region> DeviceClass for ClassB<R, REG> {
 
         // Receive using MAC layer
         self.mac.receive(buffer)
+    }
+
+    fn get_session_state(&self) -> SessionState {
+        self.mac.get_session_state().clone()
+    }
+
+    fn get_mac_layer(&self) -> &MacLayer<R, REG> {
+        &self.mac
     }
 }

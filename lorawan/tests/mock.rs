@@ -11,6 +11,7 @@ pub enum MockError {
 }
 
 /// Mock radio for testing
+#[derive(Clone)]
 pub struct MockRadio {
     frequency: u32,
     power: i8,

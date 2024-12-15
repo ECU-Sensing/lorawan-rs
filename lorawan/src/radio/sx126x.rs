@@ -2,6 +2,7 @@
 use embedded_hal::{
     blocking::spi::{Transfer, Write},
     digital::v2::{InputPin, OutputPin},
+    blocking::delay::DelayMs,
 };
 
 #[cfg(feature = "sx126x")]
@@ -85,53 +86,68 @@ pub enum RadioError {
 }
 
 #[cfg(feature = "sx126x")]
-pub struct SX126x<SPI, CS, RESET, BUSY, DIO1>
+pub struct SX126x<SPI, CS, RESET, BUSY, DIO1, DELAY>
 where
     SPI: Transfer<u8> + Write<u8>,
     CS: OutputPin,
     RESET: OutputPin,
     BUSY: InputPin,
     DIO1: InputPin,
+    DELAY: DelayMs<u32>,
 {
     spi: SPI,
     cs: CS,
     reset: RESET,
     busy: BUSY,
     dio1: DIO1,
+    delay: DELAY,
     frequency: u32,
 }
 
 #[cfg(feature = "sx126x")]
-impl<SPI, CS, RESET, BUSY, DIO1> SX126x<SPI, CS, RESET, BUSY, DIO1>
+impl<SPI, CS, RESET, BUSY, DIO1, DELAY> SX126x<SPI, CS, RESET, BUSY, DIO1, DELAY>
 where
     SPI: Transfer<u8> + Write<u8>,
     CS: OutputPin,
     RESET: OutputPin,
     BUSY: InputPin,
     DIO1: InputPin,
+    DELAY: DelayMs<u32>,
 {
-    pub fn new(spi: SPI, cs: CS, reset: RESET, busy: BUSY, dio1: DIO1) -> Result<Self, RadioError> {
+    /// Create new SX126x driver instance
+    ///
+    /// # Arguments
+    /// * `spi` - SPI interface
+    /// * `cs` - Chip select pin
+    /// * `reset` - Reset pin
+    /// * `busy` - Busy pin
+    /// * `dio1` - DIO1 interrupt pin
+    /// * `delay` - Delay implementation
+    pub fn new(
+        spi: SPI,
+        cs: CS,
+        reset: RESET,
+        busy: BUSY,
+        dio1: DIO1,
+        delay: DELAY,
+    ) -> Result<Self, RadioError> {
         let mut radio = Self {
             spi,
             cs,
             reset,
             busy,
             dio1,
+            delay,
             frequency: 0,
         };
 
-        // Reset the device
+        // Reset sequence
         radio.reset.set_high().map_err(|_| RadioError::Gpio)?;
-        // TODO: Use proper delay
-        for _ in 0..1000 {
-            core::hint::spin_loop();
-        }
+        radio.delay.delay_ms(2); // 2ms high pulse
         radio.reset.set_low().map_err(|_| RadioError::Gpio)?;
-        for _ in 0..1000 {
-            core::hint::spin_loop();
-        }
+        radio.delay.delay_ms(10); // 10ms low for reset
 
-        // Wait for busy to go low
+        // Wait for busy to go low indicating device is ready
         radio.wait_busy()?;
 
         Ok(radio)
@@ -188,13 +204,14 @@ where
 }
 
 #[cfg(feature = "sx126x")]
-impl<SPI, CS, RESET, BUSY, DIO1> Radio for SX126x<SPI, CS, RESET, BUSY, DIO1>
+impl<SPI, CS, RESET, BUSY, DIO1, DELAY> Radio for SX126x<SPI, CS, RESET, BUSY, DIO1, DELAY>
 where
     SPI: Transfer<u8> + Write<u8>,
     CS: OutputPin,
     RESET: OutputPin,
     BUSY: InputPin,
     DIO1: InputPin,
+    DELAY: DelayMs<u32>,
 {
     type Error = RadioError;
 

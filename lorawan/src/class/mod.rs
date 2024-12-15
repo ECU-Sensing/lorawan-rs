@@ -14,7 +14,10 @@ pub mod class_b;
 /// Class C device implementation
 pub mod class_c;
 
-use crate::config::device::AESKey;
+use crate::config::device::{AESKey, SessionState};
+use crate::lorawan::mac::MacLayer;
+use crate::lorawan::region::Region;
+use crate::radio::traits::Radio;
 
 /// Device operating mode
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -28,7 +31,7 @@ pub enum OperatingMode {
 }
 
 /// Common trait for all device classes
-pub trait DeviceClass {
+pub trait DeviceClass<R: Radio, REG: Region> {
     /// Error type for device operations
     type Error;
 
@@ -38,7 +41,7 @@ pub trait DeviceClass {
     /// Process device operations
     fn process(&mut self) -> Result<(), Self::Error>;
 
-    /// Send data (will handle receive windows according to class)
+    /// Send data
     fn send_data(&mut self, port: u8, data: &[u8], confirmed: bool) -> Result<(), Self::Error>;
 
     /// Send join request
@@ -51,6 +54,12 @@ pub trait DeviceClass {
 
     /// Receive data
     fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error>;
+
+    /// Get session state
+    fn get_session_state(&self) -> SessionState;
+
+    /// Get MAC layer reference
+    fn get_mac_layer(&self) -> &MacLayer<R, REG>;
 }
 
 /// RX window configuration
